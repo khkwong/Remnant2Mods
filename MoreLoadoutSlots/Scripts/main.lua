@@ -29,19 +29,162 @@ end)
 
 -- Mod #1 extra-tile logic.
 --
--- HAZARD, confirmed by a real native crash (not just a Lua error): RegisterHook's own "self"
--- parameter is NOT safe to touch at all in this context - not just for method calls
--- (self:GetFullName() returned nil rather than erroring), but even a plain PROPERTY ACCESS
--- (self.LoadoutList) crashed the game outright (log just stopped, same signature as the
--- FText crash documented in the research doc - a native crash, not something pcall can
--- catch). So RegisterHook-on-Refresh is never used here; never touch a hook's "self".
---
--- Fix: only ever use the "panel" object handed to us by NotifyOnNewObject, which has been
--- proven safe every time this session. The problem that motivated wanting a Refresh hook in
--- the first place was timing - panel.LoadoutList isn't valid yet at the exact moment
--- NotifyOnNewObject fires (construction time), so poll for it with LoopAsync instead of
--- relying on a hook to tell us when it's ready.
-local tileNameCounter = 0
+-- HAZARD (resolved, but the rule still matters): RegisterHook's "self" parameter is a
+-- RemoteUnrealParam wrapper, NOT a plain UObject. Touching it directly crashes: a method
+-- call (self:GetFullName()) silently returned nil, and a plain property access
+-- (self.LoadoutList) hard-crashed the game with no catchable error. The documented accessor
+-- self:get() unwraps it to the real UObject and was safety-tested in ZZTestMod (3 runs, all
+-- reads fine afterward). Rule: inside any RegisterHook callback, ALWAYS self:get() first,
+-- never touch the raw wrapper.
+
+-- The most recently constructed Loadouts panel. Screen reopens construct a fresh panel each
+-- time, so the tile-click hooks below must always act on the CURRENT panel, never a closured
+-- stale one (a stale closure was the original cause of the reopen bug).
+local currentPanel = nil
+
+-- Full names of every tile widget this mod has created, so the tile-click hooks can tell our
+-- tiles apart from the game's own (whose clicks already work via the panel's own delegate
+-- subscriptions - reacting to those too would double-trigger their dialogs).
+local ourTileFullNames = {}
+
+-- Wire up save/load for OUR tiles. Background (see docs/remnant2-modding-research.md
+-- 3.4o/3.4p): a tile's right/left click handlers just broadcast multicast delegates; the
+-- panel subscribes its OnLoadoutSlotSaved/OnLoadoutClicked handlers (which own the actual
+-- confirmation dialogs and save/load calls) to each tile IT creates. UE4SS Lua cannot bind
+-- multicast delegates (unsupported property type in this build), so instead we post-hook the
+-- tile class's click handlers - which DO fire on our tiles, since WidgetBlueprintLibrary
+-- .Create applied the tile-internal button bindings - and forward the event to the panel's
+-- handler ourselves, exactly as the missing delegate subscription would have.
+local tileHooksRegistered = false
+
+local function registerTileInteractionHooks()
+  if tileHooksRegistered then
+    return
+  end
+
+  -- Reads the tile's own equipped-state indicator (the EquippedIconBox overlay, whose
+  -- visibility the tile's RefreshEquipped keeps in sync by calling the LoadoutComponent's
+  -- native IsLoadoutEquipped). Reading the icon avoids calling that native function
+  -- ourselves - its parameter signature is unknown, and guess-calling native functions has
+  -- crashed the game before (the FText incident).
+  local function isTileEquipped(tile)
+    local ok, visible = pcall(function() return tile.EquippedIconBox:IsVisible() end)
+    return ok and visible == true
+  end
+
+  local function forwardTileEventToPanel(selfParam, panelHandlerName, actionLabel, blockedWhenEquipped)
+    local getOk, tile = pcall(function() return selfParam:get() end)
+    if not getOk or not tile or not tile:IsValid() then
+      return
+    end
+
+    local nameOk, fullName = pcall(function() return tile:GetFullName() end)
+    if not nameOk or not fullName or not ourTileFullNames[fullName] then
+      return -- one of the game's own tiles; its clicks already reach the panel natively
+    end
+
+    if blockedWhenEquipped and isTileEquipped(tile) then
+      print(string.format(
+        "[MoreLoadoutSlots] %s on this mod's extra tile suppressed - its loadout is currently equipped, and the game disables this action on the equipped loadout (matching vanilla tile behavior).\n",
+        actionLabel
+      ))
+      return
+    end
+
+    if not currentPanel or not currentPanel:IsValid() then
+      print(string.format(
+        "[MoreLoadoutSlots] %s detected on one of this mod's extra tiles, but no valid Loadouts panel reference is available to forward it to - ignoring.\n",
+        actionLabel
+      ))
+      return
+    end
+
+    local idxOk, idx = pcall(function() return tile.Index end)
+    if not idxOk or type(idx) ~= "number" then
+      print(string.format(
+        "[MoreLoadoutSlots] %s detected on one of this mod's extra tiles, but its Index could not be read - ignoring.\n",
+        actionLabel
+      ))
+      return
+    end
+
+    print(string.format(
+      "[MoreLoadoutSlots] %s on this mod's extra tile (Index=%d) - forwarding to the panel's %s handler (the game's own tiles get this via a delegate subscription UE4SS can't replicate).\n",
+      actionLabel, idx, panelHandlerName
+    ))
+    ExecuteInGameThread(function()
+      local callOk, callErr = pcall(function()
+        currentPanel[panelHandlerName](currentPanel, idx)
+      end)
+      if not callOk then
+        print(string.format(
+          "[MoreLoadoutSlots] FAILED to call the panel's %s handler: %s\n",
+          panelHandlerName, tostring(callErr)
+        ))
+      end
+    end)
+  end
+
+  -- Right-click = save. The tile's internal button's OnMouseRightClick is bound (via the
+  -- class's ComponentDelegateBinding) to this handler. Suppressed when the tile's loadout is
+  -- currently equipped - vanilla tiles disable overwrite-save on the equipped loadout, and
+  -- that check lives inside the vanilla tile's own handler (pre-broadcast), so a raw event
+  -- forward would bypass it.
+  local rmbOk = pcall(function()
+    RegisterHook(
+      "/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_Loadout.Widget_Loadout_C:BndEvt__Widget_Loadout_Button_K2Node_ComponentBoundEvent_0_OnFocusMouseEventDelegate__DelegateSignature",
+      function(self)
+        forwardTileEventToPanel(self, "OnLoadoutSlotSaved", "Right-click (save)", true)
+      end
+    )
+  end)
+
+  -- Left-click = load, same mechanism via the button's OnClicked.
+  local lmbOk = pcall(function()
+    RegisterHook(
+      "/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_Loadout.Widget_Loadout_C:BndEvt__Widget_Loadout_Button_K2Node_ComponentBoundEvent_2_OnAdvButtonClickedEvent__DelegateSignature",
+      function(self)
+        forwardTileEventToPanel(self, "OnLoadoutClicked", "Left-click (load)", false)
+      end
+    )
+  end)
+
+  -- Keyboard context-actions (F = delete, Space = equip) never touch the mouse bound events -
+  -- they dispatch through the tooltip framework's OnInputAction(ButtonWidget, InputAction)
+  -- instead. Enum byte values mapped via a scripted in-game test (see
+  -- docs/remnant2-modding-research.md): 1 = equip (Space), 3 = delete (F). Same forwarding
+  -- rationale: the vanilla tile's OnInputAction broadcasts delegates only panel-created tiles
+  -- have subscribers for.
+  local INPUT_ACTION_EQUIP = 1
+  local INPUT_ACTION_DELETE = 3
+
+  local keyOk = pcall(function()
+    RegisterHook(
+      "/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_Loadout.Widget_Loadout_C:OnInputAction",
+      function(self, ButtonWidgetParam, InputActionParam)
+        local actionOk, action = pcall(function() return InputActionParam:get() end)
+        if not actionOk then
+          return
+        end
+        if action == INPUT_ACTION_EQUIP then
+          forwardTileEventToPanel(self, "OnLoadoutClicked", "Space (equip)", false)
+        elseif action == INPUT_ACTION_DELETE then
+          forwardTileEventToPanel(self, "OnLoadoutSlotDeleted", "F (delete)", false)
+        end
+      end
+    )
+  end)
+
+  if rmbOk and lmbOk and keyOk then
+    tileHooksRegistered = true
+    print("[MoreLoadoutSlots] Tile interaction forwarding hooks registered: right-click (save), left-click (load), Space (equip), F (delete).\n")
+  else
+    print(string.format(
+      "[MoreLoadoutSlots] FAILED to register tile interaction forwarding hooks (right-click ok: %s, left-click ok: %s, keyboard ok: %s) - will retry next time the Loadouts screen opens.\n",
+      tostring(rmbOk), tostring(lmbOk), tostring(keyOk)
+    ))
+  end
+end
 
 local function addExtraLoadoutTile(panel)
   local TARGET_TILE_COUNT = 9
@@ -79,16 +222,30 @@ local function addExtraLoadoutTile(panel)
         return
       end
 
-      -- Unique name per construction - StaticConstructObject with a name already taken under
-      -- the same Outer can fail/misbehave.
-      tileNameCounter = tileNameCounter + 1
-      local tileName = "MoreLoadoutSlotsTile_" .. tostring(tileNameCounter)
+      -- Construct the tile the same way the game's own panel Refresh does: via
+      -- WidgetBlueprintLibrary.Create, the native function behind the Blueprint "Create Widget"
+      -- node. The earlier StaticConstructObject approach produced a tile that rendered and
+      -- showed tooltips but ignored all clicks - the tile class's FModel JSON dump revealed a
+      -- ComponentDelegateBinding wiring Button.OnMouseRightClick (save), Button.OnClicked
+      -- (load), and mouse enter/leave to the tile's handlers, and those dynamic delegate
+      -- bindings are only applied during UUserWidget::Initialize(), which CreateWidget runs
+      -- and raw StaticConstructObject skips (Initialize isn't a reflected UFunction, so it
+      -- can't be called from Lua after the fact).
+      local wblOk, wbl = pcall(function()
+        return StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
+      end)
+      if not wblOk or not wbl or not wbl:IsValid() then
+        print("[MoreLoadoutSlots] FAILED to find the engine's WidgetBlueprintLibrary (needed to create widgets through the normal UMG lifecycle) - cannot add an extra loadout slot this session. Error: " .. tostring(wbl) .. "\n")
+        return
+      end
+
+      local playerController = FindFirstOf("PlayerController")
 
       local constructOk, newTile = pcall(function()
-        return StaticConstructObject(tileClass, panel, tileName)
+        return wbl:Create(panel, tileClass, playerController)
       end)
       if not constructOk or not newTile or not newTile:IsValid() then
-        print("[MoreLoadoutSlots] FAILED to construct a new Widget_Loadout_C tile widget - cannot add an extra loadout slot this session. Error: " .. tostring(newTile) .. "\n")
+        print("[MoreLoadoutSlots] FAILED to create a new Widget_Loadout_C tile widget via WidgetBlueprintLibrary.Create - cannot add an extra loadout slot this session. Error: " .. tostring(newTile) .. "\n")
         return
       end
 
@@ -103,14 +260,23 @@ local function addExtraLoadoutTile(panel)
       pcall(function() newTile.Index = 8 end)
       pcall(function() newTile.LoadoutTemplate = template end)
 
-      pcall(function() newTile:Refresh() end)
+      -- Register this tile so the click-forwarding hooks can recognize it, and make sure
+      -- those hooks exist (registered lazily here because the Widget_Loadout_C class is
+      -- guaranteed loaded at this point, which isn't true at mod startup).
+      pcall(function() ourTileFullNames[newTile:GetFullName()] = true end)
+      registerTileInteractionHooks()
 
-      -- Experiment: right-click (save) currently does nothing on the tile, while the hover
-      -- tooltip works fine. Theory: Construct() (the normal UMG lifecycle event, which
-      -- StaticConstructObject skips - only CreateWidget triggers it automatically) sets up
-      -- focusability/hit-testing needed for input routing, which the tooltip's pull-based
-      -- query system doesn't need but OnInputAction dispatch might. Not yet confirmed.
-      pcall(function() newTile:Construct() end)
+      -- KNOWN LIMITATION, do not reattempt naively: the tile's clicks broadcast multicast
+      -- delegates (OnClicked/OnLoadoutSaved/OnLoadoutSlotDeleted) that the PANEL subscribes to
+      -- for tiles it creates itself - the save/load confirmation dialogs live in the panel's
+      -- handlers, not the tile. Binding those delegates from Lua is NOT possible in the
+      -- installed UE4SS build: merely reading newTile.OnClicked raises
+      -- "[handle_unreal_property_value] ... Property type 'MulticastInlineDelegateProperty'
+      -- not supported", and that error aborts the entire enclosing callback DESPITE pcall
+      -- (the tile never got added at all). See docs/remnant2-modding-research.md 3.4o/3.4p
+      -- for the researched workaround options.
+
+      pcall(function() newTile:Refresh() end)
 
       local addOk, addResult = pcall(function() return list:AddChild(newTile) end)
       if not addOk then
@@ -136,5 +302,6 @@ local function addExtraLoadoutTile(panel)
 end
 
 NotifyOnNewObject("/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_LoadoutsPanel.Widget_LoadoutsPanel_C", function(panel)
+  currentPanel = panel
   addExtraLoadoutTile(panel)
 end)
