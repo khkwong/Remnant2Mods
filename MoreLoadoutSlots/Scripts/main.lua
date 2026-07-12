@@ -333,7 +333,20 @@ local function addExtraLoadoutTile(panel)
         return
       end
 
-      local playerController = FindFirstOf("PlayerController")
+      -- The owning player for CreateWidget must be the LOCAL player controller. In solo play
+      -- FindFirstOf("PlayerController") happened to be it, but in multiplayer other controller
+      -- objects exist on this machine and FindFirstOf can return a remote one - CreateWidget
+      -- then returns an invalid widget (observed 2026-07-12 in a co-op session: every tile
+      -- failed IsValid). The panel widget already knows its owning player, so ask it.
+      local playerController = nil
+      local ownerOk, owner = pcall(function() return panel:GetOwningPlayer() end)
+      if ownerOk and owner and owner:IsValid() then
+        playerController = owner
+      else
+        playerController = FindFirstOf("PlayerController")
+        print(string.format("[MoreLoadoutSlots] panel:GetOwningPlayer() unavailable (%s) - falling back to FindFirstOf(\"PlayerController\"); tile creation may fail in multiplayer.\n",
+          tostring(owner)))
+      end
 
       -- A tile's clicks broadcast multicast delegates (OnClicked/OnLoadoutSaved/
       -- OnLoadoutSlotDeleted) that the PANEL subscribes to for tiles it creates itself - the
