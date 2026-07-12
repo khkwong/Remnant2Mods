@@ -307,10 +307,31 @@ Upgraded from v3.0.1 Beta (d8189f3, the Nexus "Allow Asset Mods" bundle) to the 
 - Non-fatal boot warning under the new build: `Failed to find ConsoleManagerSingleton` (2 candidate addresses) — console functionality appears to work anyway; a custom AOB via `UE4SS_Signatures/ConsoleManager.lua` is the documented fix if console commands ever misbehave.
 
 **Remaining work for mod #1 (none of it research-blocked anymore):**
-1. **Verify save persistence across a full game relaunch** — the loadout data for index 8 should live in normal save data (native `NumRecords` is already 11, so index 8 is within the game's own backing storage), but this hasn't been directly confirmed.
-2. **Generalize from 1 hardcoded extra tile to N** — loop indices 8..N-1, scale the `SetHeightOverride` value per tile count. Constraint to watch: there's no `ScrollBox`, so tiles beyond what fits the screen (688px native for 8 tiles ≈ 86px/tile) will need either a tile-size reduction, a cap, or accepting overflow.
+1. ~~**Verify save persistence across a full game relaunch**~~ — **CONFIRMED**: a loadout saved to index 8 survived a full game relaunch. (High records 11-20 still need their own persistence test — see 3.4w.)
+2. ~~**Generalize from 1 hardcoded extra tile to N**~~ — **DONE** at 20 total slots; ScrollBox injection (3.4v) solved the UI-space constraint, reserved-record discovery and gating fixes in 3.4w.
 3. ~~**Shipping-blocker quirk**: `NotifyOnNewObject` doesn't fire on a fresh launch's first screen-open (3.4k)~~ — **RESOLVED by the UE4SS experimental-latest upgrade (3.4u)**; confirmed working on cold start with no hot-reload.
-4. Retire the ZZTestMod hover test (served its purpose).
+4. ~~Retire the ZZTestMod hover test~~ — done; ZZTestMod reset to an idle scratchpad (past diagnostics recoverable from git history).
+
+### 3.4w 20 total slots WORKING — reserved record 10 discovered, empty-slot gating, FText property writes safe
+
+Generalized from the single 9th tile to **20 total player slots** (user's chosen target), all interactions confirmed working. Three findings from the first 20-slot test round:
+
+1. **Record index 10 is the game's "last gear state" auto-save.** A player-facing tile at `Index=10` self-overwrote on every equip — exactly the auto-save behavior of the character screen's last-gear-state tile. This finally explains native `NumRecords=11`: 8 visible slots + reserved storage, auto-save at the LAST native record (10). The auto-save stays pinned at 10 even with `NumRecords` patched to 21, so it's hardcoded, not "last record". **Mod behavior**: visible tiles skip record 10 (records used: 8, 9, 11..20; `NumRecords` patched to `TOTAL+1 = 21`), and skipped-past tiles get a `LabelOverride` so on-screen names stay a contiguous "Loadout 9".."Loadout 20".
+2. **Empty-slot equip gating is also tile-side (pre-broadcast)** — like the equipped-save suppression (3.4s), vanilla blocks click/Space-equip on empty slots inside the tile's own handler, so raw forwarding bypassed it (our empty tiles were equippable). Fix: gate on the tile's own **`IsEmpty` bool property** (confirmed in the FModel dump as a class property on `Widget_Loadout_C`, kept in sync by its `Refresh`) — same read-cached-state-never-call-native pattern as `EquippedIconBox`. Confirmed working. F-delete needs no empty gate (the panel's delete handler checks `HasRecord` itself).
+3. **FText PROPERTY WRITES work from Lua** with the mandatory `FText()` wrapper: `tile.LabelOverride = FText("Loadout 9")` renders correctly in-game, no crash. (The 3.4b hard crash was a raw Lua string into an FText *function parameter* — wrapped property writes are confirmed safe. Directly relevant to mod #2, LoadoutNamer, which needs exactly this kind of write.)
+
+**Last open item**: persistence of the HIGH records (11-20) across a full relaunch. Records ≤ 10 are within the game's native storage and confirmed persistent, but records 11+ exist only under our capacity patch, which applies at player-spawn — if the save-load path truncates records beyond `NumRecords` BEFORE the patch runs, high slots could be wiped on relaunch. Needs an explicit test: save into "Loadout 20" (record 20), full relaunch, check it survived.
+
+### 3.4v ScrollBox injection WORKS — runtime reparenting of live UMG widgets is viable
+
+To fit more tiles than the panel's fixed height allows (the vanilla tree is `SizeBox_0` with a hard `HeightOverride=688` → `LoadoutList` VerticalBox, no scrolling anywhere), we splice a runtime-created engine `ScrollBox` between them: `SizeBox_0 → ScrollBox → LoadoutList`. **User-confirmed fully working on first attempt**: tiles render at normal size, mouse wheel scrolls, overflowed tiles are reachable, tooltips and all click/key interactions work on scrolled-to tiles.
+
+Key points:
+- **`StaticConstructObject` is fine for engine widgets.** `ScrollBox` is a raw C++ widget (`/Script/UMG.ScrollBox`), not a Blueprint UserWidget — it has no `Initialize()`-time `ComponentDelegateBinding` step to miss, which is exactly what made raw construction fail for the tile widget (3.4n). Constructed with outer = `panel.WidgetTree`.
+- **Reparenting recipe** (game thread): grab `sizeBox = list.Slot.Parent` **before** detaching (after `RemoveChild`, `list.Slot` is gone), then `sizeBox:RemoveChild(list)` → `sizeBox:AddChild(scrollBox)` → `scrollBox:AddChild(list)`. All three worked live, mid-screen-display, with no visual glitch.
+- **Desired-size sizing worked out**: inside a ScrollBox, children get their desired size instead of fill space — the concern that tiles might collapse to zero height did not materialize; tiles keep their native ~86px.
+- The SizeBox stays at its native 688 (no more `SetHeightOverride` growth). NOTE: `list.Slot.Parent` now resolves to the **ScrollBox**, not the SizeBox — any future code reaching for the SizeBox must go one level further up.
+- Two benign log artifacts each session: panel instances constructed during class-load / world transition never get a valid `LoadoutList` and time out the 40-attempt poll — these are not player-facing screens; the real screen-opens proceed normally.
 
 ### 3.4b HAZARD — calling a UFunction with an FText parameter via Lua crashed the game
 

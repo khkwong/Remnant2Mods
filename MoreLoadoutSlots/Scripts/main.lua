@@ -1,12 +1,17 @@
 print("[MoreLoadoutSlots] Loaded and running.\n")
 
+-- The one knob: total loadout slots (vanilla has 8). Drives both the LoadoutComponent
+-- record-capacity patch and how many extra tiles get added to the Loadouts screen; the
+-- injected ScrollBox handles however many don't fit in the panel's fixed height.
+local TOTAL_LOADOUT_SLOTS = 20
+
 -- Patch the LoadoutComponent's record capacity upward on spawn. Confirmed (research session,
 -- see docs/remnant2-modding-research.md 3.4g) that GetMaxRecordsForTemplate directly proxies
 -- this field - not currently load-bearing for the single extra tile below (the underlying
 -- record storage already supports index 8 with the native default of NumRecords=11), but kept
 -- here since going beyond 11 total slots eventually will need it.
 RegisterHook("/Script/Engine.PlayerController:ClientRestart", function(self, NewPawn)
-  print("[MoreLoadoutSlots] Player spawned - patching LoadoutComponent.Slots[].NumRecords to 20.\n")
+  print(string.format("[MoreLoadoutSlots] Player spawned - patching LoadoutComponent.Slots[].NumRecords to %d (%d player slots + the reserved last-gear-state record).\n", TOTAL_LOADOUT_SLOTS + 1, TOTAL_LOADOUT_SLOTS))
 
   ExecuteInGameThread(function()
     local components = FindAllOf("LoadoutComponent")
@@ -18,8 +23,11 @@ RegisterHook("/Script/Engine.PlayerController:ClientRestart", function(self, New
       if comp:IsValid() then
         local ok, slots = pcall(function() return comp.Slots end)
         if ok and slots then
+          -- +1 because record 10 is the game's reserved "last gear state" auto-save - the
+          -- visible tiles skip it, so the highest player-facing record index is
+          -- TOTAL_LOADOUT_SLOTS (not TOTAL_LOADOUT_SLOTS - 1).
           for j = 1, #slots do
-            pcall(function() slots[j].NumRecords = 20 end)
+            pcall(function() slots[j].NumRecords = TOTAL_LOADOUT_SLOTS + 1 end)
           end
         end
       end
@@ -72,7 +80,16 @@ local function registerTileInteractionHooks()
     return ok and visible == true
   end
 
-  local function forwardTileEventToPanel(selfParam, panelHandlerName, actionLabel, blockedWhenEquipped)
+  -- The tile keeps its own IsEmpty bool in sync via its Refresh (confirmed in the FModel
+  -- dump - it's a class property on Widget_Loadout_C, not a sub-widget's). Same rationale
+  -- as isTileEquipped: read the tile's cached state instead of guess-calling the native
+  -- HasRecord function.
+  local function isTileEmpty(tile)
+    local ok, empty = pcall(function() return tile.IsEmpty end)
+    return ok and empty == true
+  end
+
+  local function forwardTileEventToPanel(selfParam, panelHandlerName, actionLabel, blockedWhenEquipped, blockedWhenEmpty)
     local getOk, tile = pcall(function() return selfParam:get() end)
     if not getOk or not tile or not tile:IsValid() then
       return
@@ -86,6 +103,14 @@ local function registerTileInteractionHooks()
     if blockedWhenEquipped and isTileEquipped(tile) then
       print(string.format(
         "[MoreLoadoutSlots] %s on this mod's extra tile suppressed - its loadout is currently equipped, and the game disables this action on the equipped loadout (matching vanilla tile behavior).\n",
+        actionLabel
+      ))
+      return
+    end
+
+    if blockedWhenEmpty and isTileEmpty(tile) then
+      print(string.format(
+        "[MoreLoadoutSlots] %s on this mod's extra tile suppressed - the slot is empty, and vanilla tiles ignore this action on empty slots (the vanilla check lives in the tile's own handler, pre-broadcast, so a raw forward would bypass it).\n",
         actionLabel
       ))
       return
@@ -134,7 +159,7 @@ local function registerTileInteractionHooks()
     RegisterHook(
       "/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_Loadout.Widget_Loadout_C:BndEvt__Widget_Loadout_Button_K2Node_ComponentBoundEvent_0_OnFocusMouseEventDelegate__DelegateSignature",
       function(self)
-        forwardTileEventToPanel(self, "OnLoadoutSlotSaved", "Right-click (save)", true)
+        forwardTileEventToPanel(self, "OnLoadoutSlotSaved", "Right-click (save)", true, false)
       end
     )
   end)
@@ -144,7 +169,7 @@ local function registerTileInteractionHooks()
     RegisterHook(
       "/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_Loadout.Widget_Loadout_C:BndEvt__Widget_Loadout_Button_K2Node_ComponentBoundEvent_2_OnAdvButtonClickedEvent__DelegateSignature",
       function(self)
-        forwardTileEventToPanel(self, "OnLoadoutClicked", "Left-click (load)", false)
+        forwardTileEventToPanel(self, "OnLoadoutClicked", "Left-click (load)", false, true)
       end
     )
   end)
@@ -167,9 +192,11 @@ local function registerTileInteractionHooks()
           return
         end
         if action == INPUT_ACTION_EQUIP then
-          forwardTileEventToPanel(self, "OnLoadoutClicked", "Space (equip)", false)
+          forwardTileEventToPanel(self, "OnLoadoutClicked", "Space (equip)", false, true)
         elseif action == INPUT_ACTION_DELETE then
-          forwardTileEventToPanel(self, "OnLoadoutSlotDeleted", "F (delete)", false)
+          -- F on an empty slot already no-ops naturally (the panel's delete handler checks
+          -- HasRecord itself - confirmed matching vanilla in testing), so no empty gate.
+          forwardTileEventToPanel(self, "OnLoadoutSlotDeleted", "F (delete)", false, false)
         end
       end
     )
@@ -186,8 +213,63 @@ local function registerTileInteractionHooks()
   end
 end
 
+-- Wrap the panel's tile container (LoadoutList) in a runtime-created ScrollBox so more tiles
+-- than the panel's fixed 688px can hold stay reachable by scrolling. The vanilla widget tree
+-- is SizeBox_0 (fixed height) -> LoadoutList (VerticalBox); we splice a ScrollBox between
+-- them: SizeBox_0 -> ScrollBox -> LoadoutList. A plain engine ScrollBox is safe to build with
+-- StaticConstructObject - unlike the Blueprint tile widget, it's a raw C++ widget with no
+-- Initialize()-time delegate bindings to miss (the thing that forced tiles onto
+-- WidgetBlueprintLibrary.Create).
+local function injectScrollBox(panel, list)
+  -- Already inside a ScrollBox? (Each screen-open builds a fresh panel, so this normally
+  -- can't happen - cheap guard against the callback somehow running twice for one panel.)
+  local parentOk, parent = pcall(function() return list:GetParent() end)
+  if parentOk and parent and parent:IsValid() then
+    local classOk, className = pcall(function() return parent:GetClass():GetFullName() end)
+    if classOk and className and className:find("ScrollBox") then
+      return true
+    end
+  end
+
+  -- Grab the SizeBox BEFORE detaching the list - after RemoveChild, list.Slot is gone.
+  local sizeBoxOk, sizeBox = pcall(function() return list.Slot.Parent end)
+  if not sizeBoxOk or not sizeBox or not sizeBox:IsValid() then
+    print("[MoreLoadoutSlots] FAILED to reach the SizeBox above LoadoutList - cannot inject the ScrollBox, extra tiles would render off-panel.\n")
+    return false
+  end
+
+  local scrollClassOk, scrollClass = pcall(function()
+    return StaticFindObject("/Script/UMG.ScrollBox")
+  end)
+  if not scrollClassOk or not scrollClass or not scrollClass:IsValid() then
+    print("[MoreLoadoutSlots] FAILED to find the engine ScrollBox class - cannot inject the ScrollBox.\n")
+    return false
+  end
+
+  local constructOk, scrollBox = pcall(function()
+    return StaticConstructObject(scrollClass, panel.WidgetTree)
+  end)
+  if not constructOk or not scrollBox or not scrollBox:IsValid() then
+    print("[MoreLoadoutSlots] FAILED to construct a ScrollBox widget: " .. tostring(scrollBox) .. "\n")
+    return false
+  end
+
+  local spliceOk, spliceErr = pcall(function()
+    sizeBox:RemoveChild(list)
+    sizeBox:AddChild(scrollBox)
+    scrollBox:AddChild(list)
+  end)
+  if not spliceOk then
+    print("[MoreLoadoutSlots] FAILED to splice the ScrollBox into the widget tree: " .. tostring(spliceErr) .. "\n")
+    return false
+  end
+
+  print("[MoreLoadoutSlots] ScrollBox injected between the panel's SizeBox and LoadoutList.\n")
+  return true
+end
+
 local function addExtraLoadoutTile(panel)
-  local TARGET_TILE_COUNT = 9
+  local TARGET_TILE_COUNT = TOTAL_LOADOUT_SLOTS
   local attempts = 0
   local MAX_ATTEMPTS = 40 -- ~2 seconds at 50ms per attempt, safety cap
 
@@ -205,6 +287,10 @@ local function addExtraLoadoutTile(panel)
 
     -- LoadoutList is valid - safe to proceed. Do the actual work inside the game thread.
     ExecuteInGameThread(function()
+      if not injectScrollBox(panel, list) then
+        return -- without the ScrollBox, extra tiles would render below the visible panel
+      end
+
       -- Idempotency guard: this whole function can run again on a screen reopen (a fresh
       -- NotifyOnNewObject firing for a newly-constructed panel instance). Skip if the target
       -- count is already met.
@@ -239,62 +325,100 @@ local function addExtraLoadoutTile(panel)
         return
       end
 
-      local playerController = FindFirstOf("PlayerController")
-
-      local constructOk, newTile = pcall(function()
-        return wbl:Create(panel, tileClass, playerController)
-      end)
-      if not constructOk or not newTile or not newTile:IsValid() then
-        print("[MoreLoadoutSlots] FAILED to create a new Widget_Loadout_C tile widget via WidgetBlueprintLibrary.Create - cannot add an extra loadout slot this session. Error: " .. tostring(newTile) .. "\n")
-        return
-      end
-
       local templateOk, template = pcall(function()
         return StaticFindObject("/Game/_Core/Loadouts/Gear_Loadout.Gear_Loadout")
       end)
       if not templateOk or not template or not template:IsValid() then
-        print("[MoreLoadoutSlots] FAILED to find the Gear_Loadout template asset - cannot configure the new tile. Error: " .. tostring(template) .. "\n")
+        print("[MoreLoadoutSlots] FAILED to find the Gear_Loadout template asset - cannot configure new tiles. Error: " .. tostring(template) .. "\n")
         return
       end
 
-      pcall(function() newTile.Index = 8 end)
-      pcall(function() newTile.LoadoutTemplate = template end)
+      local playerController = FindFirstOf("PlayerController")
 
-      -- Register this tile so the click-forwarding hooks can recognize it, and make sure
-      -- those hooks exist (registered lazily here because the Widget_Loadout_C class is
-      -- guaranteed loaded at this point, which isn't true at mod startup).
-      pcall(function() ourTileFullNames[newTile:GetFullName()] = true end)
-      registerTileInteractionHooks()
-
-      -- KNOWN LIMITATION, do not reattempt naively: the tile's clicks broadcast multicast
+      -- KNOWN LIMITATION, do not reattempt naively: a tile's clicks broadcast multicast
       -- delegates (OnClicked/OnLoadoutSaved/OnLoadoutSlotDeleted) that the PANEL subscribes to
       -- for tiles it creates itself - the save/load confirmation dialogs live in the panel's
-      -- handlers, not the tile. Binding those delegates from Lua is NOT possible in the
-      -- installed UE4SS build: merely reading newTile.OnClicked raises
-      -- "[handle_unreal_property_value] ... Property type 'MulticastInlineDelegateProperty'
-      -- not supported", and that error aborts the entire enclosing callback DESPITE pcall
-      -- (the tile never got added at all). See docs/remnant2-modding-research.md 3.4o/3.4p
-      -- for the researched workaround options.
+      -- handlers, not the tile. Binding those delegates from Lua was NOT possible in UE4SS
+      -- 3.0.1: merely reading newTile.OnClicked raised "[handle_unreal_property_value] ...
+      -- Property type 'MulticastInlineDelegateProperty' not supported", and that error aborted
+      -- the entire enclosing callback DESPITE pcall (the tile never got added at all). The
+      -- forwarding hooks below are the workaround. (The experimental UE4SS build may support
+      -- delegate :Add() now - unverified here; see docs/remnant2-modding-research.md 3.4o/3.4p.)
 
-      pcall(function() newTile:Refresh() end)
+      -- Create one tile per missing slot. Vanilla tiles occupy records 0..7; ours continue
+      -- from there - EXCEPT record 10, the game's reserved "last gear state" auto-save
+      -- (discovered in testing: a tile at Index=10 self-overwrites on every equip, exactly
+      -- like the auto-save slot; native NumRecords=11 = 8 visible + reserved storage). So
+      -- our tiles use records 8, 9, 11, 12, ... and each tile whose record index no longer
+      -- matches its visible position gets a LabelOverride so the on-screen names stay a
+      -- clean "Loadout 9".."Loadout 20" with no gap.
+      local RESERVED_RECORD_INDEX = 10
+      local addedCount = 0
+      local recordIndex = currentCount
+      local visibleCount = currentCount
+      while visibleCount < TARGET_TILE_COUNT do
+        if recordIndex == RESERVED_RECORD_INDEX then
+          recordIndex = recordIndex + 1
+        else
+          local constructOk, newTile = pcall(function()
+            return wbl:Create(panel, tileClass, playerController)
+          end)
+          if not constructOk or not newTile or not newTile:IsValid() then
+            print(string.format("[MoreLoadoutSlots] FAILED to create the tile for record index %d via WidgetBlueprintLibrary.Create - stopping here (%d of the extra tiles were added). Error: %s\n",
+              recordIndex, addedCount, tostring(newTile)))
+            break
+          end
 
-      local addOk, addResult = pcall(function() return list:AddChild(newTile) end)
-      if not addOk then
-        print("[MoreLoadoutSlots] FAILED to add the new tile into the Loadouts screen's tile list - it was constructed and configured, but never became visible. Error: " .. tostring(addResult) .. "\n")
-        return
+          pcall(function() newTile.Index = recordIndex end)
+          pcall(function() newTile.LoadoutTemplate = template end)
+
+          -- Default tile label is "Loadout {Index+1}"; past the reserved record the index
+          -- runs ahead of the visible position, so pin the label to the visible position.
+          -- FText() wrapping is mandatory - a raw Lua string into an FText slot is the
+          -- known hard-crash class (research doc 3.4b), though that was a function call
+          -- and this is a property write.
+          if recordIndex ~= visibleCount then
+            local labelOk, labelErr = pcall(function()
+              newTile.LabelOverride = FText(string.format("Loadout %d", visibleCount + 1))
+            end)
+            if not labelOk then
+              print(string.format("[MoreLoadoutSlots] Could not set the label override for the tile at record index %d (it will display its record-derived name instead): %s\n",
+                recordIndex, tostring(labelErr)))
+            end
+          end
+
+          -- Register this tile so the click-forwarding hooks can recognize it.
+          pcall(function() ourTileFullNames[newTile:GetFullName()] = true end)
+
+          pcall(function() newTile:Refresh() end)
+
+          local addOk, addResult = pcall(function() return list:AddChild(newTile) end)
+          if not addOk then
+            print(string.format("[MoreLoadoutSlots] FAILED to add the tile for record index %d into the Loadouts screen's tile list - stopping here (%d of the extra tiles were added). Error: %s\n",
+              recordIndex, addedCount, tostring(addResult)))
+            break
+          end
+
+          addedCount = addedCount + 1
+          visibleCount = visibleCount + 1
+          recordIndex = recordIndex + 1
+        end
       end
 
-      -- SizeBox_0 (fixed HeightOverride=688, room for 8 tiles) isn't a bound variable on the
-      -- panel, so reach it via LoadoutList's own Slot.Parent instead - confirmed from the JSON
-      -- dump that SizeBoxSlot_0.Parent points back to SizeBox_0. 688 / 8 tiles = 86px/tile.
-      -- Plain property write on HeightOverride has no visible effect - only the real
-      -- SetHeightOverride function triggers a re-layout.
-      local sizeBoxOk, sizeBox = pcall(function() return list.Slot.Parent end)
-      if sizeBoxOk and sizeBox and sizeBox:IsValid() then
-        pcall(function() sizeBox:SetHeightOverride(774.0) end)
+      -- Make sure the forwarding hooks exist (registered lazily here because the
+      -- Widget_Loadout_C class is guaranteed loaded at this point, which isn't true at
+      -- mod startup).
+      if addedCount > 0 then
+        registerTileInteractionHooks()
       end
 
-      print("[MoreLoadoutSlots] Added a 9th loadout slot tile (Index=8) to the Loadouts screen.\n")
+      -- The SizeBox stays at its native 688px HeightOverride (8 tiles' worth) on purpose -
+      -- the injected ScrollBox handles all overflow. (Historical: before the ScrollBox we
+      -- grew the SizeBox itself via list.Slot.Parent:SetHeightOverride - that path is dead,
+      -- and list.Slot.Parent now resolves to the ScrollBox, not the SizeBox.)
+
+      print(string.format("[MoreLoadoutSlots] Added %d extra loadout tiles (records %d-%d, skipping the reserved last-gear-state record %d) - the Loadouts screen now has %d slots.\n",
+        addedCount, currentCount, recordIndex - 1, RESERVED_RECORD_INDEX, visibleCount))
     end)
 
     return true -- stop looping, we found a valid LoadoutList

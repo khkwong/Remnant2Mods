@@ -165,4 +165,16 @@ The tile never saves anything itself — it only broadcasts (`OnClicked`, `OnLoa
 
 ### MILESTONE — the 9th slot is fully functional (renders, saves, loads)
 
-Click forwarding confirmed in-game: right-click → real "SAVE LOADOUT?" dialog → working save; left-click → working load. Mod #1's core mechanism is complete. Remaining: verify the saved loadout survives a full game relaunch; generalize 1 tile → N (no ScrollBox exists, so tile size/count must respect the fixed panel area); fix the `NotifyOnNewObject` needs-one-hot-reload-after-launch quirk before the mod is shippable.
+Click forwarding confirmed in-game: right-click → real "SAVE LOADOUT?" dialog → working save; left-click → working load. Mod #1's core mechanism is complete. Remaining: ~~verify the saved loadout survives a full game relaunch~~ (confirmed); generalize 1 tile → N; ~~fix the `NotifyOnNewObject` needs-one-hot-reload-after-launch quirk~~ (fixed by the UE4SS experimental-latest upgrade).
+
+### ScrollBox injection works — the fixed-panel-height constraint is solved
+
+A runtime-created engine `ScrollBox` (`/Script/UMG.ScrollBox` via `StaticConstructObject` — safe for raw C++ widgets, which have no `Initialize()` delegate-binding step to miss) spliced between `SizeBox_0` and `LoadoutList` (`RemoveChild`/`AddChild` reparenting on the live widget tree, game thread) gives the tile list mouse-wheel scrolling with tiles at full native size. User-confirmed working on first attempt: scrolling, tooltips, and all interactions intact on overflowed tiles. The SizeBox stays at its native 688px; `list.Slot.Parent` now resolves to the ScrollBox, not the SizeBox. This unblocked generalizing to the user's chosen target of **20 total slots**.
+
+### Record index 10 is the reserved "last gear state" auto-save — native NumRecords=11 explained
+
+A player-facing tile at `Index=10` self-overwrote on every equip: record 10 is the game's last-gear-state auto-save, pinned there even with `NumRecords` patched higher. Native `NumRecords=11` = 8 visible slots + reserved storage with the auto-save at the last native record. The mod's tiles skip record 10 (using 8, 9, 11..20 with `NumRecords=21`) and use the tile's `LabelOverride` FText property to keep on-screen names contiguous. Two more per-tile properties confirmed useful on `Widget_Loadout_C`: **`IsEmpty`** (bool, synced by `Refresh` — used to gate click/Space-equip on empty slots, which vanilla blocks tile-side pre-broadcast) and **`LabelOverride`** (FText — property writes via `tile.LabelOverride = FText("...")` work fine from Lua; the old FText hard-crash was specific to raw strings in *function parameters*; directly reusable for mod #2, LoadoutNamer).
+
+### MILESTONE — 20 total loadout slots fully functional
+
+All interactions (save, load, Space-equip, F-delete, equipped-save suppression, empty-slot suppression) confirmed working across all 12 extra tiles, including the highest record (20). Remaining check: whether records 11-20 (beyond native storage) persist across a full relaunch, given the capacity patch applies at player-spawn.
