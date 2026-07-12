@@ -335,15 +335,14 @@ local function addExtraLoadoutTile(panel)
 
       local playerController = FindFirstOf("PlayerController")
 
-      -- KNOWN LIMITATION, do not reattempt naively: a tile's clicks broadcast multicast
-      -- delegates (OnClicked/OnLoadoutSaved/OnLoadoutSlotDeleted) that the PANEL subscribes to
-      -- for tiles it creates itself - the save/load confirmation dialogs live in the panel's
-      -- handlers, not the tile. Binding those delegates from Lua was NOT possible in UE4SS
-      -- 3.0.1: merely reading newTile.OnClicked raised "[handle_unreal_property_value] ...
-      -- Property type 'MulticastInlineDelegateProperty' not supported", and that error aborted
-      -- the entire enclosing callback DESPITE pcall (the tile never got added at all). The
-      -- forwarding hooks below are the workaround. (The experimental UE4SS build may support
-      -- delegate :Add() now - unverified here; see docs/remnant2-modding-research.md 3.4o/3.4p.)
+      -- A tile's clicks broadcast multicast delegates (OnClicked/OnLoadoutSaved/
+      -- OnLoadoutSlotDeleted) that the PANEL subscribes to for tiles it creates itself - the
+      -- save/load confirmation dialogs live in the panel's handlers, not the tile. Each new
+      -- tile below tries to replicate those exact subscriptions natively via the delegate
+      -- :Add() API (added in experimental UE4SS; under 3.0.1 merely READING the property
+      -- aborted the whole callback despite pcall - see research doc 3.4o). Tiles where the
+      -- native binding fails fall back to the hook-forwarding path (registerTileInteraction-
+      -- Hooks + the ourTileFullNames registry).
 
       -- Create one tile per missing slot. Vanilla tiles occupy records 0..7; ours continue
       -- from there - EXCEPT record 10, the game's reserved "last gear state" auto-save
@@ -354,6 +353,8 @@ local function addExtraLoadoutTile(panel)
       -- clean "Loadout 9".."Loadout 20" with no gap.
       local RESERVED_RECORD_INDEX = 10
       local addedCount = 0
+      local boundCount = 0    -- tiles on the native delegate-subscription path
+      local fallbackCount = 0 -- tiles on the hook-forwarding fallback path
       local recordIndex = currentCount
       local visibleCount = currentCount
       while visibleCount < TARGET_TILE_COUNT do
@@ -387,8 +388,30 @@ local function addExtraLoadoutTile(panel)
             end
           end
 
-          -- Register this tile so the click-forwarding hooks can recognize it.
-          pcall(function() ourTileFullNames[newTile:GetFullName()] = true end)
+          -- Subscribe the panel's handlers to this tile's delegates - the exact bindings the
+          -- panel's own Refresh gives the tiles IT creates (delegate names and handler
+          -- pairings verified against both FModel dumps). On this path the tile behaves 100%
+          -- vanilla: its own handlers gate the equipped/empty cases BEFORE broadcasting, and
+          -- all four inputs (LMB/RMB/Space/F) route through these three delegates natively.
+          local bindOk, bindErr = pcall(function()
+            newTile.OnClicked:Add(panel, FName("OnLoadoutClicked"))
+            newTile.OnLoadoutSaved:Add(panel, FName("OnLoadoutSlotSaved"))
+            newTile.OnLoadoutSlotDeleted:Add(panel, FName("OnLoadoutSlotDeleted"))
+          end)
+          if bindOk then
+            boundCount = boundCount + 1
+          else
+            -- Roll back any binding that DID land before the failure (a half-bound tile on
+            -- the fallback path would double-fire that event), then register the tile for
+            -- the hook-forwarding fallback.
+            pcall(function() newTile.OnClicked:Remove(panel, FName("OnLoadoutClicked")) end)
+            pcall(function() newTile.OnLoadoutSaved:Remove(panel, FName("OnLoadoutSlotSaved")) end)
+            pcall(function() newTile.OnLoadoutSlotDeleted:Remove(panel, FName("OnLoadoutSlotDeleted")) end)
+            fallbackCount = fallbackCount + 1
+            print(string.format("[MoreLoadoutSlots] Native delegate binding failed for the tile at record index %d - using the hook-forwarding fallback for it. Error: %s\n",
+              recordIndex, tostring(bindErr)))
+            pcall(function() ourTileFullNames[newTile:GetFullName()] = true end)
+          end
 
           pcall(function() newTile:Refresh() end)
 
@@ -405,10 +428,10 @@ local function addExtraLoadoutTile(panel)
         end
       end
 
-      -- Make sure the forwarding hooks exist (registered lazily here because the
-      -- Widget_Loadout_C class is guaranteed loaded at this point, which isn't true at
-      -- mod startup).
-      if addedCount > 0 then
+      -- The forwarding hooks are only needed for fallback-path tiles (registered lazily
+      -- here because the Widget_Loadout_C class is guaranteed loaded at this point, which
+      -- isn't true at mod startup).
+      if fallbackCount > 0 then
         registerTileInteractionHooks()
       end
 
@@ -417,8 +440,8 @@ local function addExtraLoadoutTile(panel)
       -- grew the SizeBox itself via list.Slot.Parent:SetHeightOverride - that path is dead,
       -- and list.Slot.Parent now resolves to the ScrollBox, not the SizeBox.)
 
-      print(string.format("[MoreLoadoutSlots] Added %d extra loadout tiles (records %d-%d, skipping the reserved last-gear-state record %d) - the Loadouts screen now has %d slots.\n",
-        addedCount, currentCount, recordIndex - 1, RESERVED_RECORD_INDEX, visibleCount))
+      print(string.format("[MoreLoadoutSlots] Added %d extra loadout tiles (records %d-%d, skipping the reserved last-gear-state record %d) - the Loadouts screen now has %d slots. Interaction paths: %d native delegate subscriptions, %d hook-forwarding fallbacks.\n",
+        addedCount, currentCount, recordIndex - 1, RESERVED_RECORD_INDEX, visibleCount, boundCount, fallbackCount))
     end)
 
     return true -- stop looping, we found a valid LoadoutList
