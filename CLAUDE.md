@@ -13,11 +13,11 @@ Beginner modder — some hex-editing and light Blueprint-modding background, no 
 - `START_HERE.md` — current status, immediate next steps, symlink setup instructions. Read first.
 - `remnant2-modding-research.md` — all research to date: toolchain, confirmed UE4SS Lua API patterns, real Remnant 2 asset path conventions, open questions. Read before writing new hooks or investigating widgets, so findings aren't rediscovered from scratch.
 - `<ModName>/enabled.txt` + `<ModName>/Scripts/main.lua` — each mod's actual source, one folder per mod (`LoadoutSlotCount`, `LoadoutNamer`, `RingAmuletSearch`).
-- Live game folder: `...\Remnant2\Remnant2\Binaries\Win64\` — this is where `UE4SS.log` lives (read this to verify anything, don't assume Lua is correct from inspection alone) and where `Mods\mods.txt` lives (shared registry file, edited directly, not part of any mod's symlinked folder — add a line here for every new mod).
+- Live game folder: `...\Remnant2\Remnant2\Binaries\Win64\ue4ss\` (UE4SS experimental-latest layout — only the `dwmapi.dll` proxy sits in `Win64\` itself). `UE4SS.log` lives here (read this to verify anything, don't assume Lua is correct from inspection alone), and `Mods\` contains BOTH registry files, `mods.txt` and `mods.json` — keep them in sync; register every new mod in both. Old 3.0.1 install preserved at `Win64\_ue4ss-3.0.1-backup` for rollback.
 
 ## How mod folders get to the game
 
-Each mod folder in this repo is symlinked into the game's `Win64\Mods\` folder (instructions in `START_HERE.md`). This is a one-time setup per new mod folder, not a recurring step. Never copy files into the game folder manually — if a mod folder isn't showing up in-game, check whether the symlink exists before copying anything.
+Each mod folder in this repo is symlinked into the game's `Win64\ue4ss\Mods\` folder via `scripts\New-ModSymlink.ps1` (run elevated; instructions in `START_HERE.md`). This is a one-time setup per new mod folder, not a recurring step. Never copy files into the game folder manually — if a mod folder isn't showing up in-game, check whether the symlink exists before copying anything.
 
 ## Development workflow
 

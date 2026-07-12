@@ -8,8 +8,10 @@
   exist under the repo root with a Scripts\main.lua inside it.
 
 .PARAMETER GameWin64Path
-  Path to the game's Win64 folder. Defaults to the standard Steam install
-  location; override if your install is elsewhere.
+  Path to the folder that CONTAINS the Mods folder. Since the UE4SS
+  experimental-latest upgrade (new install layout), that's the game's
+  Win64\ue4ss folder, not Win64 itself. Defaults to the standard Steam
+  install location; override if your install is elsewhere.
 
 .PARAMETER Force
   If the target in Win64\Mods already exists as a real folder (not a
@@ -23,7 +25,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ModName,
 
-    [string]$GameWin64Path = "C:\Program Files (x86)\Steam\steamapps\common\Remnant2\Remnant2\Binaries\Win64",
+    [string]$GameWin64Path = "C:\Program Files (x86)\Steam\steamapps\common\Remnant2\Remnant2\Binaries\Win64\ue4ss",
 
     [switch]$Force
 )
