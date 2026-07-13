@@ -4,6 +4,10 @@ print("[ZZTestMod] Loaded and running (idle - no active diagnostic).\n")
 -- and LoadoutNamer/Scripts/main.lua.
 --
 -- Currently idle. Past diagnostics are recoverable from git history:
+--   - InGameMenu tab-hotkey probe (T/I/M dispatch through Widget_InGameMenu_C:
+--     FocusTraits/FocusInventory/FocusMap; SetIsEnabled(false) on the tab buttons
+--     does NOT block the hotkeys, SetVisibility(2)=Hidden DOES - the Focus*
+--     functions early-out on the tab's IsVisible(). Research doc 3.4aa.)
 --   - LoadoutNamer probe round 1 (P1: LabelOverride on vanilla tiles survives the
 --     game's own equip/delete/save-over refreshes - PASSED. P2: raw EditableTextBox
 --     injection renders, takes focus, accepts typing in menu context; Text readable

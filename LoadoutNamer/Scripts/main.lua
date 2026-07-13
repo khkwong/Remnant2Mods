@@ -4,7 +4,9 @@ print("[LoadoutNamer] Loaded and running.\n")
 --   Hover a loadout tile and press F2 -> a text box opens in the tile's title row.
 --   Type the new name, then Enter or F2 commits; Escape cancels. Names persist in
 --   loadout_names.txt next to this mod (one "recordIndex<TAB>name" line per slot) and
---   are re-applied every time the Loadouts panel is constructed.
+--   are re-applied every time the Loadouts panel is constructed. The hover tooltip's
+--   title also shows the (full, untruncated) name; long names show truncated on the
+--   tile itself.
 --
 -- Everything here composes building blocks proven in ZZTestMod probe rounds 1-2
 -- (research doc 3.4y/3.4z): LabelOverride FText writes survive the game's own
@@ -18,10 +20,20 @@ local MOUSE_ENTER_FN = "/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_Lo
 -- renders as the hoverable "Last Gear State" tile on the character screen (3.4z).
 local RESERVED_RECORD_INDEX = 10
 
--- Longest name a slot can keep. The tile label (GFGRemnantCracked font, size 12,
--- rendered uppercase) runs off the tile's right edge somewhere past ~18 characters -
--- there's no wrapping or ellipsis - so commits are truncated to this.
-local MAX_NAME_LENGTH = 18
+-- Longest name a slot can keep (storage cap). The full name shows in the hover
+-- tooltip's title, which is much wider than the tile.
+local MAX_NAME_LENGTH = 32
+
+-- The tile label (GFGRemnantCracked font, size 12, rendered uppercase) runs off the
+-- tile's right edge somewhere past ~18 characters - there's no wrapping or ellipsis -
+-- so names longer than this are shown truncated on the tile (full name in the tooltip).
+local TILE_LABEL_MAX = 18
+
+-- The hover tooltip (Widget_LoadoutTooltip dump): its title is an ItemLabel TextBlock
+-- whose text is the static string "Loadout" (dump line ~2186) - the game never varies
+-- it, so writing it per-hover is safe and writing the literal back restores default.
+local TOOLTIP_CLASS_NAME = "Widget_LoadoutTooltip_C"
+local TOOLTIP_DEFAULT_TITLE = "Loadout"
 
 -- MoreLoadoutSlots builds the panel out to 20 tiles; waiting for that count sequences
 -- our apply-names pass after its label pass with no explicit coordination (3.4y).
@@ -123,9 +135,19 @@ local function writeLabel(tile, text)
   return ok
 end
 
+-- What the tile itself displays for a custom name: truncated with a ".." marker when
+-- it would run off the tile. The stored name stays full-length for the tooltip.
+local function tileTextFor(name)
+  if #name > TILE_LABEL_MAX then
+    return name:sub(1, TILE_LABEL_MAX - 2) .. ".."
+  end
+  return name
+end
+
 -- Game thread only. Puts the slot's correct at-rest label on the tile.
 local function applyRestingLabel(tile, recordIndex)
-  writeLabel(tile, names[recordIndex] or defaultLabelFor(recordIndex))
+  local name = names[recordIndex]
+  writeLabel(tile, name and tileTextFor(name) or defaultLabelFor(recordIndex))
 end
 
 -- ============================== apply pass ==============================
@@ -157,7 +179,7 @@ local function applySavedNames(panel)
           local tile = panel.LoadoutList:GetChildAt(i)
           local idx = tile.Index
           if names[idx] then
-            if writeLabel(tile, names[idx]) then
+            if writeLabel(tile, tileTextFor(names[idx])) then
               applied = applied + 1
             end
           end
@@ -173,6 +195,104 @@ local function applySavedNames(panel)
 
     return true
   end)
+end
+
+-- ============================== tooltip title ==============================
+
+-- Write the hovered slot's name (or the "Loadout" default) into the tooltip's title.
+-- The tooltip widget is created/shown by the game some time after mouse-enter, so a
+-- short poll finds it and keeps rewriting for ~1s to land after the game's own setup.
+-- A generation counter cancels stale polls when the hover moves on.
+local tooltipGen = 0
+
+local function scheduleTooltipTitle(recordIndex)
+  tooltipGen = tooltipGen + 1
+  local gen = tooltipGen
+  local title = names[recordIndex] or TOOLTIP_DEFAULT_TITLE
+  local attempts = 0
+  local logged = false
+
+  LoopAsync(50, function()
+    if gen ~= tooltipGen then
+      return true -- a newer hover superseded this poll
+    end
+    attempts = attempts + 1
+
+    pcall(function()
+      local tooltips = FindAllOf(TOOLTIP_CLASS_NAME)
+      if tooltips then
+        for _, tt in ipairs(tooltips) do
+          -- Skip the class-default object: writing its template would leak the
+          -- title into every future tooltip instance.
+          if tt:IsValid() and not tt:GetFullName():find("Default__") then
+            ExecuteInGameThread(function()
+              pcall(function() tt.ItemLabel:SetText(FText(title)) end)
+            end)
+            if not logged then
+              logged = true
+              print(string.format("[LoadoutNamer] Tooltip title set for record %d ('%s').\n", recordIndex, title))
+            end
+          end
+        end
+      end
+    end)
+
+    return attempts >= 20 -- ~1s of coverage
+  end)
+end
+
+-- ============================== tab hotkey suppression ==============================
+
+-- The in-game menu's T/I/M keys switch tabs even while the rename box has keyboard
+-- focus, and UE4SS can't consume input. But the game gates each switch on the tab
+-- button's own visibility (ZZTestMod probe: FocusTraits/FocusInventory/FocusMap still
+-- fire with the buttons hidden, then early-out on an IsVisible check). So: hide those
+-- tab buttons for the duration of an edit. Hidden (ESlateVisibility 2) - not Collapsed -
+-- keeps their layout space, so the tab bar doesn't reflow; the labels just fade out.
+-- The game resets tab visibility itself when the menu reopens, so a leaked Hidden
+-- state (screen closed mid-edit) self-heals.
+local TAB_HOTKEY_PROPS = { "TraitTab", "InventoryTab", "MapTab" }
+local hiddenTabs = {}
+
+-- Game thread only.
+local function suppressTabHotkeys()
+  local menu = nil
+  pcall(function()
+    local all = FindAllOf("Widget_InGameMenu_C")
+    if all then
+      for _, m in ipairs(all) do
+        if m:IsValid() and not m:GetFullName():find("Default__") then
+          menu = m
+        end
+      end
+    end
+  end)
+  if not menu then
+    return
+  end
+  for _, prop in ipairs(TAB_HOTKEY_PROPS) do
+    pcall(function()
+      local tab = menu[prop]
+      -- Only touch tabs the game is currently showing, so restore can't force-show
+      -- a tab the game itself hides in this context.
+      if tab and tab:IsValid() and tab:IsVisible() then
+        tab:SetVisibility(2) -- Hidden: blocks the hotkey, keeps layout space
+        table.insert(hiddenTabs, tab)
+      end
+    end)
+  end
+end
+
+-- Game thread only.
+local function restoreTabHotkeys()
+  for _, tab in ipairs(hiddenTabs) do
+    pcall(function()
+      if tab:IsValid() then
+        tab:SetVisibility(0) -- Visible
+      end
+    end)
+  end
+  hiddenTabs = {}
 end
 
 -- ============================== rename session ==============================
@@ -195,6 +315,12 @@ local function registerHoverHook()
       local getOk, tile = pcall(function() return self:get() end)
       if getOk and tile and tile:IsValid() then
         hoveredTile = tile
+        -- Reflected property read only in the hook body (H8); the tooltip work
+        -- itself runs later on the async poll + game thread.
+        local idxOk, idx = pcall(function() return tile.Index end)
+        if idxOk and type(idx) == "number" then
+          scheduleTooltipTitle(idx)
+        end
       end
     end)
   end)
@@ -242,6 +368,9 @@ local function beginRename(tile, recordIndex)
       editBox = box
       editTile = tile
       editIndex = recordIndex
+
+      -- Typing T/I/M must not yank the menu to another tab mid-edit.
+      suppressTabHotkeys()
     end)
     if ok then
       print(string.format("[LoadoutNamer] Renaming slot (record %d) - click the box, type the new name, then Enter/F2 to commit or Escape to cancel. Committing an empty name removes the custom name.\n", recordIndex))
@@ -255,6 +384,8 @@ local function endRename(commit)
   ExecuteInGameThread(function()
     local box, tile, idx = editBox, editTile, editIndex
     editBox, editTile, editIndex = nil, nil, nil
+
+    restoreTabHotkeys()
 
     local text = ""
     pcall(function() text = box.Text:ToString() end)
@@ -280,7 +411,7 @@ local function endRename(commit)
     text = text:gsub("[\t\r\n]", ""):match("^%s*(.-)%s*$")
 
     if #text > MAX_NAME_LENGTH then
-      print(string.format("[LoadoutNamer] Name truncated to %d characters (the tile label has no wrapping and runs off the tile past that).\n", MAX_NAME_LENGTH))
+      print(string.format("[LoadoutNamer] Name truncated to %d characters (the storage cap; the tile shows the first %d with '..', the tooltip shows the rest).\n", MAX_NAME_LENGTH, TILE_LABEL_MAX))
       text = text:sub(1, MAX_NAME_LENGTH):match("^(.-)%s*$")
     end
 
@@ -295,6 +426,10 @@ local function endRename(commit)
       applyRestingLabel(tile, idx)
       print(string.format("[LoadoutNamer] Record %d named '%s' (saved).\n", idx, text))
     end
+
+    -- If the tooltip is on screen right now (mouse is still over the tile), bring its
+    -- title in line with the new name immediately.
+    scheduleTooltipTitle(idx)
   end)
 end
 
@@ -307,6 +442,7 @@ local function editSessionActive()
     return true
   end
   editBox, editTile, editIndex = nil, nil, nil -- box died with the screen
+  ExecuteInGameThread(restoreTabHotkeys) -- belt-and-braces; menu reopen resets these anyway
   return false
 end
 
