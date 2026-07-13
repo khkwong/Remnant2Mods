@@ -18,6 +18,11 @@ local MOUSE_ENTER_FN = "/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_Lo
 -- renders as the hoverable "Last Gear State" tile on the character screen (3.4z).
 local RESERVED_RECORD_INDEX = 10
 
+-- Longest name a slot can keep. The tile label (GFGRemnantCracked font, size 12,
+-- rendered uppercase) runs off the tile's right edge somewhere past ~18 characters -
+-- there's no wrapping or ellipsis - so commits are truncated to this.
+local MAX_NAME_LENGTH = 18
+
 -- MoreLoadoutSlots builds the panel out to 20 tiles; waiting for that count sequences
 -- our apply-names pass after its label pass with no explicit coordination (3.4y).
 -- If that mod is ever disabled, the 8-tile vanilla panel would time the poll out - the
@@ -66,7 +71,8 @@ local function loadNames()
     for line in f:lines() do
       local idx, name = line:match("^(%d+)\t(.+)$")
       if idx and name then
-        names[tonumber(idx)] = name
+        -- Enforce the length cap on pre-existing entries too (older saves may predate it).
+        names[tonumber(idx)] = name:sub(1, MAX_NAME_LENGTH):match("^(.-)%s*$")
         count = count + 1
       end
     end
@@ -203,10 +209,14 @@ end
 local function beginRename(tile, recordIndex)
   ExecuteInGameThread(function()
     local ok, err = pcall(function()
-      local label = tile.Label
-      local row = label:GetParent()
-      if not row or not row:IsValid() then
-        error("could not reach the tile's title row")
+      -- Parent the box into the VERTICAL box holding the tile's text rows (reached via
+      -- the Archetype subtitle, a named variable like Label). In a VerticalBox the box
+      -- gets its own full-width row below the subtitle; appending it to the title row
+      -- (a HorizontalBox) instead left it squished against the tile's right edge - the
+      -- blanked Label still reserves its MinDesiredWidth=130 there.
+      local column = tile.Archetype:GetParent()
+      if not column or not column:IsValid() then
+        error("could not reach the tile's text column")
       end
 
       local box = StaticConstructObject(StaticFindObject("/Script/UMG.EditableTextBox"), tile.WidgetTree)
@@ -216,11 +226,18 @@ local function beginRename(tile, recordIndex)
       -- Raw write is fine here: MinimumDesiredWidth feeds desired-size computation each
       -- frame, and a failed/ignored write just means a narrower box.
       pcall(function() box.MinimumDesiredWidth = 130.0 end)
-      row:AddChild(box)
+      column:AddChild(box)
 
-      -- Blank the tile's label for the duration of the edit so the box gets the row to
-      -- itself instead of squishing in next to the old text (probe round 2 finding).
+      -- Blank the tile's label for the duration of the edit so it's obvious which name
+      -- is being replaced (the old text comes back on cancel).
       writeLabel(tile, " ")
+
+      -- Blank the archetype subtitle too - the box sits right on top of it. Must happen
+      -- AFTER writeLabel's Refresh (Refresh re-derives the subtitle), and must use the
+      -- real SetText setter, not a raw Text write (H4: raw writes on visual properties
+      -- don't invalidate Slate). Restore is automatic: every exit from the edit calls
+      -- Refresh again via applyRestingLabel. Non-fatal if it fails - just overlap.
+      pcall(function() tile.Archetype:SetText(FText(" ")) end)
 
       editBox = box
       editTile = tile
@@ -261,6 +278,11 @@ local function endRename(commit)
 
     -- Trim and strip characters that would corrupt the tab-separated store.
     text = text:gsub("[\t\r\n]", ""):match("^%s*(.-)%s*$")
+
+    if #text > MAX_NAME_LENGTH then
+      print(string.format("[LoadoutNamer] Name truncated to %d characters (the tile label has no wrapping and runs off the tile past that).\n", MAX_NAME_LENGTH))
+      text = text:sub(1, MAX_NAME_LENGTH):match("^(.-)%s*$")
+    end
 
     if text == "" then
       names[idx] = nil
