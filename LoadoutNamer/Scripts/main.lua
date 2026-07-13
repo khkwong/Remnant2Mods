@@ -35,6 +35,16 @@ local TILE_LABEL_MAX = 18
 local TOOLTIP_CLASS_NAME = "Widget_LoadoutTooltip_C"
 local TOOLTIP_DEFAULT_TITLE = "Loadout"
 
+-- The tile label's font asset, from dev-data/Widget_Loadout.json (~3574-3580). Loaded
+-- whenever the character screen is up, so StaticFindObject finds it when we need it.
+-- StaticFindObject needs the FULL object path (Package.ObjectName) - the bare package
+-- path fails with "GetPackageNameFromLongName: Name wasn't long" (2026-07-13 log).
+local EDIT_FONT_PATH = "/Game/UI/Fonts/GFGRemnantCracked_Font.GFGRemnantCracked_Font"
+
+-- The game's reusable key-glyph widget (dev-data/Widget_KeyIcon.json): Background image
+-- + KeyText TextBlock. Used for the tooltip's "F2 Rename" prompt.
+local KEYICON_CLASS_PATH = "/Game/UI/UI_Widgets/Widget_KeyIcon.Widget_KeyIcon_C"
+
 -- MoreLoadoutSlots builds the panel out to 20 tiles; waiting for that count sequences
 -- our apply-names pass after its label pass with no explicit coordination (3.4y).
 -- If that mod is ever disabled, the 8-tile vanilla panel would time the poll out - the
@@ -197,6 +207,121 @@ local function applySavedNames(panel)
   end)
 end
 
+-- ============================== tooltip rename prompt ==============================
+
+-- Adds an "F2 Rename" entry to the tooltip's action-button footer. The footer widget
+-- (Widget_Tooltip_Actions_C, a named variable on the tooltip) has an ExtraActionList
+-- HorizontalBox that exists precisely for extra entries, so this is the game's own
+-- extension point - we append a real Widget_KeyIcon (the game's key-glyph widget,
+-- created through WidgetBlueprintLibrary.Create so it initializes like the game's own)
+-- plus a TextBlock label styled like the tile text.
+-- One prompt per live tooltip instance: more than one tooltip can be alive at once
+-- (hovering tile B while tile A's tooltip still exists), so track by the instance's
+-- ExtraActionList full name. A single global reference here caused an alternating
+-- recreate loop that stacked duplicate prompts (2026-07-13 test).
+local promptsByExtra = {} -- [ExtraActionList full name] = { icon = ..., label = ... }
+
+-- Game thread only. Idempotent - called on every tooltip-poll tick.
+local function ensureRenamePrompt(tooltip, recordIndex)
+  local ok, err = pcall(function()
+    local actions = tooltip.Widget_Tooltip_Actions
+    if not actions or not actions:IsValid() then
+      return
+    end
+    local extra = actions.ExtraActionList
+    if not extra or not extra:IsValid() then
+      return
+    end
+
+    -- Already installed in THIS tooltip instance? Validate the stored widgets are
+    -- alive AND still parented here (an object name can be recycled by a new
+    -- instance after the old one is garbage-collected).
+    local extraName = extra:GetFullName()
+    local entry = promptsByExtra[extraName]
+    local present = false
+    pcall(function()
+      if entry and entry.icon:IsValid() and entry.label:IsValid() then
+        local parent = entry.icon:GetParent()
+        present = parent and parent:IsValid() and parent:GetFullName() == extraName
+      end
+    end)
+
+    if not present then
+      local wbl = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
+      local keyIconClass = StaticFindObject(KEYICON_CLASS_PATH)
+      if not (wbl and wbl:IsValid() and keyIconClass and keyIconClass:IsValid()) then
+        return
+      end
+      -- Owning player must come from an owned widget, never FindFirstOf (multiplayer
+      -- rule, research doc 3.4z).
+      local player = tooltip:GetOwningPlayer()
+      if not player or not player:IsValid() then
+        return
+      end
+
+      local keyIcon = wbl:Create(tooltip, keyIconClass, player)
+      if not keyIcon or not keyIcon:IsValid() then
+        print("[LoadoutNamer] Could not create the KeyIcon widget for the tooltip's Rename prompt.\n")
+        return
+      end
+
+      local label = StaticConstructObject(StaticFindObject("/Script/UMG.TextBlock"), tooltip.WidgetTree)
+      if not label or not label:IsValid() then
+        return
+      end
+      -- Match the tile text's look (font write-back: reading the struct hands a
+      -- detached copy, so mutate then assign back - same lesson as the edit box style).
+      -- Creation-time only, so the error logs below can't spam.
+      local fOk, fErr = pcall(function()
+        local f = label.Font
+        f.Size = 10.0 -- before the font lookup, so a lookup failure can't abort the size
+        local font = StaticFindObject(EDIT_FONT_PATH)
+        if font and font:IsValid() then
+          f.FontObject = font
+        end
+        label.Font = f
+      end)
+      if not fOk then
+        print("[LoadoutNamer] Rename-prompt label font styling failed: " .. tostring(fErr) .. "\n")
+      end
+      local cOk, cErr = pcall(function()
+        local c = label.ColorAndOpacity
+        c.SpecifiedColor.R = 0.7
+        c.SpecifiedColor.G = 0.7
+        c.SpecifiedColor.B = 0.7
+        c.SpecifiedColor.A = 1.0
+        pcall(function() c.ColorUseRule = 0 end)
+        label.ColorAndOpacity = c
+      end)
+      if not cOk then
+        print("[LoadoutNamer] Rename-prompt label color styling failed: " .. tostring(cErr) .. "\n")
+      end
+
+      extra:AddChild(keyIcon)
+      extra:AddChild(label)
+      -- Center the label vertically in the action row like the game's own prompt
+      -- labels (2 = VAlign_Center). The slot only exists after AddChild.
+      pcall(function() label.Slot:SetVerticalAlignment(2) end)
+      entry = { icon = keyIcon, label = label }
+      promptsByExtra[extraName] = entry
+      print("[LoadoutNamer] 'F2 Rename' prompt added to the loadout tooltip's action row.\n")
+    end
+
+    -- Re-assert the texts every tick: the KeyIcon's own Construct may derive KeyText
+    -- from its (unset) InputActionName after we first write it, and SetText is cheap.
+    pcall(function() entry.icon.KeyText:SetText(FText("F2")) end)
+    pcall(function() entry.label:SetText(FText("Rename")) end)
+
+    -- The reserved Last Gear State record can't be renamed - hide the prompt there.
+    local vis = (recordIndex == RESERVED_RECORD_INDEX) and 1 or 0 -- 1 = Collapsed
+    pcall(function() entry.icon:SetVisibility(vis) end)
+    pcall(function() entry.label:SetVisibility(vis) end)
+  end)
+  if not ok then
+    print("[LoadoutNamer] Rename-prompt injection failed: " .. tostring(err) .. "\n")
+  end
+end
+
 -- ============================== tooltip title ==============================
 
 -- Write the hovered slot's name (or the "Loadout" default) into the tooltip's title.
@@ -227,6 +352,7 @@ local function scheduleTooltipTitle(recordIndex)
           if tt:IsValid() and not tt:GetFullName():find("Default__") then
             ExecuteInGameThread(function()
               pcall(function() tt.ItemLabel:SetText(FText(title)) end)
+              ensureRenamePrompt(tt, recordIndex)
             end)
             if not logged then
               logged = true
@@ -295,6 +421,110 @@ local function restoreTabHotkeys()
   hiddenTabs = {}
 end
 
+-- ============================== edit box styling ==============================
+
+-- Target look, from dev-data/Widget_Loadout.json (~3565-3581): the tile label is
+-- EDIT_FONT_PATH size 12, color 0.7/0.7/0.7.
+
+-- Sets R/G/B/A on an FSlateColor's SpecifiedColor, and pins ColorUseRule to
+-- UseColor_Specified (0) - if the rule was set to inherit, the specified color
+-- would be ignored no matter what we write into it.
+local function setSlateColor(slateColor, r, g, b, a)
+  slateColor.SpecifiedColor.R = r
+  slateColor.SpecifiedColor.G = g
+  slateColor.SpecifiedColor.B = b
+  slateColor.SpecifiedColor.A = a
+  pcall(function() slateColor.ColorUseRule = 0 end)
+end
+
+-- Best-effort restyle toward the game's look. WidgetStyle struct writes are the
+-- riskiest op class (research doc 3.4), so: every path is read-probed before it is
+-- written (a failed read = that layout doesn't exist on this engine version = skip,
+-- never guess), each group has its own pcall, and any failure just leaves that part
+-- of the box at the engine default. Must run BEFORE the box enters the widget tree
+-- so Slate builds with these values.
+local function styleEditBox(box)
+  local fontApplied, fgApplied, bgApplied, writtenBack = false, false, false, false
+
+  pcall(function()
+    -- Read-modify-WRITE-BACK: reading a struct property may hand back a detached
+    -- copy (first attempt's nested writes changed nothing visually), so after
+    -- mutating we assign the whole struct back to the property below.
+    local style = box.WidgetStyle
+
+    -- Font: probed at both known layouts - TextStyle.Font (newer style structs) and
+    -- Font directly on the style (what this game's build actually exposes; the
+    -- TextStyle path read-fails here, confirmed via the styling log 2026-07-13).
+    -- Size 10 (the Archetype subtitle's size) rather than the label's 12: the box has
+    -- fixed width, and the smaller size keeps more of a long name visible while typing.
+    pcall(function()
+      local fontStruct = nil
+      -- Both known layouts read-fail on this build; log each path's actual error
+      -- once so the real field name can be identified instead of guessed (H6).
+      local candidates = {
+        { "TextStyle.Font", function() return style.TextStyle.Font end },
+        { "Font",           function() return style.Font end },
+      }
+      for _, cand in ipairs(candidates) do
+        local ok, resultOrErr = pcall(cand[2])
+        if ok and resultOrErr then
+          fontStruct = resultOrErr
+          break
+        else
+          print(string.format("[LoadoutNamer] Font path '%s': %s\n", cand[1], tostring(resultOrErr)))
+        end
+      end
+      if fontStruct then
+        -- Each write logged separately: the path READS fine but the writes were
+        -- failing silently inside the enclosing pcall (2026-07-13 log).
+        local sizeOk, sizeErr = pcall(function() fontStruct.Size = 10.0 end)
+        if not sizeOk then
+          print("[LoadoutNamer] Font Size write failed: " .. tostring(sizeErr) .. "\n")
+        end
+        local fobOk, fobErr = pcall(function()
+          local font = StaticFindObject(EDIT_FONT_PATH)
+          if font and font:IsValid() then
+            fontStruct.FontObject = font
+          end
+        end)
+        if not fobOk then
+          print("[LoadoutNamer] FontObject write failed: " .. tostring(fobErr) .. "\n")
+        end
+        -- Write the font struct back up the chain in case reading it detached a copy
+        -- (colors didn't need this, but they're one level shallower).
+        pcall(function() style.TextStyle.Font = fontStruct end)
+        fontApplied = sizeOk or fobOk
+      end
+    end)
+
+    -- Typed text color: ashen gray, brighter than the label's 0.7 so it stands out
+    -- against the near-black box fill (user-tuned).
+    pcall(function()
+      local _ = style.ForegroundColor.SpecifiedColor.R
+      setSlateColor(style.ForegroundColor, 0.85, 0.85, 0.85, 1.0)
+      pcall(function() setSlateColor(style.FocusedForegroundColor, 0.85, 0.85, 0.85, 1.0) end)
+      fgApplied = true
+    end)
+
+    -- Background: tint the engine's white rounded-box brush dark and translucent so
+    -- the box reads as part of the tile in all three interaction states.
+    pcall(function()
+      local _ = style.BackgroundImageNormal.TintColor.SpecifiedColor.R
+      setSlateColor(style.BackgroundImageNormal.TintColor, 0.02, 0.02, 0.02, 0.85)
+      pcall(function() setSlateColor(style.BackgroundImageHovered.TintColor, 0.04, 0.04, 0.04, 0.9) end)
+      pcall(function() setSlateColor(style.BackgroundImageFocused.TintColor, 0.04, 0.04, 0.04, 0.9) end)
+      bgApplied = true
+    end)
+
+    box.WidgetStyle = style -- write the mutated struct back onto the widget
+    writtenBack = true
+  end)
+
+  print(string.format("[LoadoutNamer] Edit box styling: font=%s, text-color=%s, background=%s, write-back=%s.\n",
+    fontApplied and "ok" or "skipped", fgApplied and "ok" or "skipped", bgApplied and "ok" or "skipped",
+    writtenBack and "ok" or "FAILED"))
+end
+
 -- ============================== rename session ==============================
 
 local hoveredTile = nil -- last tile the mouse entered (kept on leave - forgiving F2 timing)
@@ -335,14 +565,13 @@ end
 local function beginRename(tile, recordIndex)
   ExecuteInGameThread(function()
     local ok, err = pcall(function()
-      -- Parent the box into the VERTICAL box holding the tile's text rows (reached via
-      -- the Archetype subtitle, a named variable like Label). In a VerticalBox the box
-      -- gets its own full-width row below the subtitle; appending it to the title row
-      -- (a HorizontalBox) instead left it squished against the tile's right edge - the
-      -- blanked Label still reserves its MinDesiredWidth=130 there.
-      local column = tile.Archetype:GetParent()
-      if not column or not column:IsValid() then
-        error("could not reach the tile's text column")
+      -- Parent the box into the TITLE row (the HorizontalBox holding the Label), so the
+      -- edit happens visually where the name lives. The blanked Label would normally
+      -- squish the box by reserving its MinDesiredWidth=130 in that row, so zero it for
+      -- the duration of the edit (plain-float property write; endRename restores it).
+      local row = tile.Label:GetParent()
+      if not row or not row:IsValid() then
+        error("could not reach the tile's title row")
       end
 
       local box = StaticConstructObject(StaticFindObject("/Script/UMG.EditableTextBox"), tile.WidgetTree)
@@ -352,18 +581,16 @@ local function beginRename(tile, recordIndex)
       -- Raw write is fine here: MinimumDesiredWidth feeds desired-size computation each
       -- frame, and a failed/ignored write just means a narrower box.
       pcall(function() box.MinimumDesiredWidth = 130.0 end)
-      column:AddChild(box)
+      styleEditBox(box) -- before AddChild: Slate builds the box with these values
 
-      -- Blank the tile's label for the duration of the edit so it's obvious which name
-      -- is being replaced (the old text comes back on cancel).
+      -- Blank the tile's label and stop it reserving width, THEN add the box - it
+      -- takes the label's place in the title row. The subtitle stays visible below.
+      -- MinDesiredWidth is a LAYOUT property: the real SetMinDesiredWidth setter is
+      -- mandatory, a raw write doesn't invalidate Slate layout (H4 - the raw write
+      -- indeed changed nothing, 2026-07-13 test).
       writeLabel(tile, " ")
-
-      -- Blank the archetype subtitle too - the box sits right on top of it. Must happen
-      -- AFTER writeLabel's Refresh (Refresh re-derives the subtitle), and must use the
-      -- real SetText setter, not a raw Text write (H4: raw writes on visual properties
-      -- don't invalidate Slate). Restore is automatic: every exit from the edit calls
-      -- Refresh again via applyRestingLabel. Non-fatal if it fails - just overlap.
-      pcall(function() tile.Archetype:SetText(FText(" ")) end)
+      pcall(function() tile.Label:SetMinDesiredWidth(0.0) end)
+      row:AddChild(box)
 
       editBox = box
       editTile = tile
@@ -400,6 +627,10 @@ local function endRename(commit)
     if not tile or not tile:IsValid() then
       return -- screen closed mid-edit; the next apply pass restores labels anyway
     end
+
+    -- Give the label its reserved title-row width back (zeroed for the edit).
+    -- Real setter, not a raw write - layout property (H4).
+    pcall(function() tile.Label:SetMinDesiredWidth(130.0) end)
 
     if not commit then
       applyRestingLabel(tile, idx)
