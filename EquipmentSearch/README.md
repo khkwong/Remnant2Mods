@@ -23,14 +23,17 @@ A working search bar for your inventory.
 
 ## Installation
 
-1. Copy the `EquipmentSearch` folder into your UE4SS Mods folder:
+1. Download `EquipmentSearch-v1.0.0.zip` from the
+   [Releases page](../../../releases) and extract it — you'll get an
+   `EquipmentSearch` folder containing `Scripts\`, `mod.json`, and this README.
+2. Copy that folder into your UE4SS Mods folder:
    - Experimental-latest: `<Remnant2>\Binaries\Win64\ue4ss\Mods\`
    - Stable: `<Remnant2>\Binaries\Win64\Mods\`
-2. Add a line for it in that folder's `mods.txt`:
+3. Add a line for it in that folder's `mods.txt`:
    ```
    EquipmentSearch : 1
    ```
-3. Launch the game.
+4. Launch the game.
 
 ## Known limitations
 

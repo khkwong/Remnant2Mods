@@ -40,17 +40,21 @@ choice with no cosmetic caveats.
 
 ## Installation
 
-1. Copy the mod folder(s) you want into your UE4SS Mods folder — the path
-   depends on which build you installed (see table above):
+1. Download the mod(s) you want from the [Releases page](../../releases) —
+   each mod ships as its own zip (e.g. `MoreLoadoutSlots-v1.0.0.zip`) and
+   extracts to a single folder (e.g. `MoreLoadoutSlots\`) containing
+   `Scripts\`, `mod.json`, and `README.md`.
+2. Extract that folder into your UE4SS Mods folder — the path depends on
+   which build you installed (see table above):
    - Experimental-latest: `<Remnant2>\Binaries\Win64\ue4ss\Mods\`
    - Stable: `<Remnant2>\Binaries\Win64\Mods\`
-2. Add a line for each mod in that folder's `mods.txt`, e.g.:
+3. Add a line for each mod in that folder's `mods.txt`, e.g.:
    ```
    MoreLoadoutSlots : 1
    LoadoutNamer : 1
    EquipmentSearch : 1
    ```
-3. Launch the game.
+4. Launch the game.
 
 ## License
 
