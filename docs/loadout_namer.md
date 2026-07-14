@@ -10,6 +10,32 @@ Status: **feature-complete and user-confirmed** as of 2026-07-13. Source: `Loado
 - **Persistence**: `ue4ss/Mods/LoadoutNamer/loadout_names.txt`, tab-separated `recordIndex<TAB>name` lines, whole-file rewrite on every commit. Tabs/newlines stripped from names on commit.
 - **Tab-hotkey suppression**: during an edit, the Traits/Inventory/Map tab buttons are set Hidden (visibility 2, keeps layout space) so T/I/M can't yank the menu; restored on every exit path. Confirmed necessary 2026-07-14: EquipmentSearch proved a focused, character-receiving text box does NOT block the hotkey dispatch (TODO.md, research doc §3.6c).
 
+## User guide
+
+**Keybinds** (active on the Character → Loadouts screen):
+
+| Key | Action |
+|---|---|
+| **F2** (while hovering a tile) | Start renaming that loadout |
+| **Enter** or **F2** (while editing) | Commit the new name |
+| **Escape** (while editing) | Cancel, keep the old name |
+
+**How to rename a loadout:**
+
+1. Open the character screen and go to the Loadouts panel.
+2. Hover the mouse over the loadout tile you want to rename.
+3. Press **F2**. The tile's title text is replaced by a text box (dark fill, game font). It already has keyboard focus — just type.
+4. Press **Enter** (or F2 again) to save, or **Escape** to cancel.
+5. To remove a custom name, rename the slot and commit with the box empty — the tile returns to its default label ("Loadout N" / the archetype-combo name).
+
+**What to expect on screen:**
+
+- **Name length**: names can be up to 32 characters. The tile itself shows at most 18 — longer names are cut off with `..` on the tile, but the hover tooltip's title always shows the full name.
+- **Tooltip**: hovering a tile shows its tooltip with the custom name as the title and an **"F2 Rename"** prompt in the action row at the bottom, alongside the game's own prompts.
+- **While editing**: the Traits/Inventory/Map tab labels at the top of the menu fade out — this is intentional, so typing T/I/M doesn't switch tabs. They come back as soon as the edit ends.
+- **Last Gear State**: the auto-save slot cannot be renamed — F2 does nothing on it and its tooltip shows no Rename prompt.
+- **Persistence**: names are saved immediately on commit and survive relaunches. They are shared across all characters on this install.
+
 ## Key implementation facts
 
 - Record indices: vanilla 0–7, mod tiles 8, 9, 11–20; **record 10 is the reserved Last Gear State auto-save** — F2 refuses it and the tooltip prompt hides on it.

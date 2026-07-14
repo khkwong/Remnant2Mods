@@ -9,6 +9,40 @@ Status: **feature-complete and user-confirmed** as of 2026-07-14. Source: `Equip
 - **Tab-hotkey suppression**: while the search box has keyboard focus, the menu's Traits/Inventory/Map tab buttons are set Hidden (visibility 2, keeps layout space) so typing t/i/m can't yank the menu to another tab; restored when focus leaves. Engages on click-in, before the first keystroke.
 - **Debug commands** (typed into the search box; kept in the shipped mod): `!<word>` prints the full cached text of every matching item, `!!` clears the text cache, `!?` lists items whose cache is name-only — the after-a-game-patch health check (0 of 213 rings as of 2026-07-14).
 
+## User guide
+
+### Using the search bar
+
+- The bar sits at the top of every inventory item grid (rings, amulets, armor, relics, weapons, and the Inventory tab's materials/quest/usable lists). **Click into the box and type** — the grid filters live on every keystroke; no Enter needed (Enter does nothing extra).
+- **Clearing**: click the **X button**, or delete the text. An empty box always shows the full grid.
+- The filter is per-list: each grid has its own box and its own active query.
+
+### Search logic
+
+- **Case-insensitive plain substring** match — no wildcards, regex, or word-order tolerance. A multi-word query is one exact phrase: `grey health` matches "…of grey health…"; `health grey` matches nothing.
+- **What's searched** per item: the **name**, the **type line** (e.g. "Ring"), and the **gameplay-effect text** — the sentences the tooltip shows, including numbers (`15%`, `3m` are searchable).
+- **What's deliberately NOT searched**: the lore paragraph and the quoted flavor text. The search is gameplay-only by design.
+- Formatting is invisible to matching: the game's color/stat markup and line breaks are stripped before comparison, so phrases match even where the tooltip styles or wraps mid-phrase.
+
+### Keys while typing
+
+- **T / I / M** (Traits/Inventory/Map tab hotkeys) are **suppressed while the box has keyboard focus** — their tab labels fade to show suppression is active, and both labels and hotkeys return the moment focus leaves the box (click elsewhere). Without this, typing any `m` yanked the menu to the map.
+- Other menu letter hotkeys (U/J/O/P/B) are **not** suppressed; in testing they haven't interfered while the box is focused. If one ever does, the fix is one entry in `TAB_HOTKEY_PROPS`.
+
+### Debug commands (type into the search box)
+
+Anything starting with `!` is a command, not a search — the grid shows everything while a command is in the box, and all output goes to `UE4SS.log`, not on screen:
+
+- **`!<word>`** (word must be ≥ 2 characters) — prints the FULL cached search text of every item containing `<word>`. Use it to answer "why did/didn't item X match?"
+- **`!!`** — clears the item text cache; the next keystroke rebuilds it fresh from the live grid. Use after upgrading an item (see below) or whenever cached text looks stale.
+- **`!?`** — lists every item whose cached text is *name-only* (no effect text found — such an item can never match an effect search) plus a total count. Healthy state is `0 name-only item(s) total`; a nonzero count after a game patch means the game moved some items' effect text again.
+
+### Special cases
+
+- **Upgraded items**: the cache is built once per session, so an item upgraded mid-session keeps its old "+N" level suffix in its searchable text until you type `!!` or relaunch. Name and effect words still match; only the level number is stale.
+- **Inventory-tab lists** (materials/quest/usable) don't keep the filter across tab switches — switching tabs rebuilds the list unfiltered; retype to re-filter.
+- The equipment screen's grids share one search box; the Inventory tab's lists each have their own.
+
 ## Key implementation facts
 
 - **The vanilla filter pipeline is dead, so matching and hiding are both ours.** The shipped bar was a keyword→tag prototype fed by `DataTable_ItemFilters`, which ships empty; and every vanilla rebuild entry point (including the once-planned `ShouldHideItem` hook) early-outs when the game thinks nothing changed. The mod instead walks `list.InventoryGrid`'s card children on query change and calls `SetVisibility` per card, recording each hidden card's prior visibility for exact restore.

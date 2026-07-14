@@ -2,7 +2,7 @@
 
 ## What this project is
 
-UE4SS Lua mods for Remnant 2 (Steam/PC, Unreal Engine 5.2). Three mods, in priority order: increase loadout slot count (**DONE** — `MoreLoadoutSlots`, 20 slots), name loadout slots, add a search bar to the ring/amulet inventory screen. Session docs live in `dev-docs/`, research in `docs/` — they are the source of truth, not this file.
+UE4SS Lua mods for Remnant 2 (Steam/PC, Unreal Engine 5.2). Three mods, **all shipped** (as of 2026-07-14): `MoreLoadoutSlots` (20 slots), `LoadoutNamer` (F2-rename loadout tiles), `EquipmentSearch` (inventory search bar). The project is in maintenance/extension mode — each mod has a `*_DONE.md` brief in `dev-docs/` (read that first for any work on that mod) and a reference doc in `docs/`. Session docs live in `dev-docs/`, research in `docs/` — they are the source of truth, not this file.
 
 ## Project owner
 
@@ -13,7 +13,7 @@ Beginner modder — some hex-editing and light Blueprint-modding background, no 
 - `dev-docs/` — session handoff briefs. `LOADOUT_NAMER_START.md` is the entry point for mod #2 work; `START_HERE.md` is the original project handoff (partially stale — the per-mod briefs and research doc supersede it where they conflict).
 - `docs/remnant2-modding-research.md` — all research to date: toolchain, confirmed UE4SS Lua API patterns, hazards, open questions. Check the relevant sections before writing new hooks or investigating widgets, so findings (and crashes) aren't rediscovered from scratch. `docs/game_research.md` mirrors game-side findings/milestones.
 - `dev-data/` — FModel property-JSON dumps of game widgets (`Widget_Loadout.json`, `Widget_LoadoutsPanel.json`). This is where confirmed class/property/function names come from — grep these before considering Live View.
-- `<ModName>/Scripts/main.lua` — each mod's actual source, one folder per mod (`MoreLoadoutSlots` done; `LoadoutNamer`, `RingAmuletSearch` planned). Do NOT add an `enabled.txt` to mod folders — its mere presence force-enables the mod, silently overriding the registry (removed from all mods 2026-07-12); enable/disable via `mods.txt` only.
+- `<ModName>/Scripts/main.lua` — each mod's actual source, one folder per mod (`MoreLoadoutSlots`, `LoadoutNamer`, `EquipmentSearch` — all shipped). Do NOT add an `enabled.txt` to mod folders — its mere presence force-enables the mod, silently overriding the registry (removed from all mods 2026-07-12); enable/disable via `mods.txt` only.
 - `ZZTestMod/Scripts/main.lua` — the diagnostics scratchpad. Throwaway probes go here, never in feature mods. When a probe is done, reset this to idle and note what it proved in its header comment (past probes stay recoverable from git history).
 - Live game folder: `...\Remnant2\Remnant2\Binaries\Win64\ue4ss\` (UE4SS experimental-latest layout — only the `dwmapi.dll` proxy sits in `Win64\` itself). `UE4SS.log` lives here (read this to verify anything, don't assume Lua is correct from inspection alone), and `Mods\` contains two registry files — register new mods in `mods.txt` ONLY; `mods.json` is auto-regenerated from `mods.txt` at launch and hand edits to it are discarded (UE4SS transition behavior, PR #540 — `mods.txt` wins until a future release flips precedence). Old 3.0.1 install preserved at `Win64\_ue4ss-3.0.1-backup` for rollback.
 
