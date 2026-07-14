@@ -268,6 +268,34 @@ local function injectScrollBox(panel, list)
   return true
 end
 
+-- Whether this UE4SS build supports Lua access to MulticastInlineDelegateProperty
+-- (added in experimental-latest, 3.4x). On builds without it, merely READING
+-- newTile.OnClicked pierces pcall and aborts the whole enclosing function - not a
+-- catchable Lua error - so this is probed once, in isolation, on an EXISTING
+-- vanilla tile (index 0, always present) BEFORE the tile-creation loop ever
+-- touches the property on a tile of ours. Success is detected by reaching the
+-- line after the risky read, never by pcall's return value (which the failure
+-- is known to bypass).
+local multicastDelegatesProbed = false
+local multicastDelegatesSupported = false
+
+local function probeMulticastDelegateSupport(list)
+  if multicastDelegatesProbed then
+    return
+  end
+  multicastDelegatesProbed = true
+  pcall(function()
+    local vanillaTile = list:GetChildAt(0)
+    if vanillaTile and vanillaTile:IsValid() then
+      local _ = vanillaTile.OnClicked -- the risky read; unreached below if unsupported
+      multicastDelegatesSupported = true
+    end
+  end)
+  print(string.format("[MoreLoadoutSlots] Multicast delegate Lua support: %s.\n",
+    multicastDelegatesSupported and "yes (native tile bindings will be used)"
+      or "no (all tiles will use the hook-forwarding fallback)"))
+end
+
 local function addExtraLoadoutTile(panel)
   local TARGET_TILE_COUNT = TOTAL_LOADOUT_SLOTS
   local attempts = 0
@@ -290,6 +318,8 @@ local function addExtraLoadoutTile(panel)
       if not injectScrollBox(panel, list) then
         return -- without the ScrollBox, extra tiles would render below the visible panel
       end
+
+      probeMulticastDelegateSupport(list)
 
       -- Idempotency guard: this whole function can run again on a screen reopen (a fresh
       -- NotifyOnNewObject firing for a newly-constructed panel instance). Skip if the target
@@ -406,23 +436,31 @@ local function addExtraLoadoutTile(panel)
           -- pairings verified against both FModel dumps). On this path the tile behaves 100%
           -- vanilla: its own handlers gate the equipped/empty cases BEFORE broadcasting, and
           -- all four inputs (LMB/RMB/Space/F) route through these three delegates natively.
-          local bindOk, bindErr = pcall(function()
-            newTile.OnClicked:Add(panel, FName("OnLoadoutClicked"))
-            newTile.OnLoadoutSaved:Add(panel, FName("OnLoadoutSlotSaved"))
-            newTile.OnLoadoutSlotDeleted:Add(panel, FName("OnLoadoutSlotDeleted"))
-          end)
+          -- Never attempt this when the startup probe found no multicast delegate
+          -- support - on those builds even the property READ inside the pcall below
+          -- would pierce it and abort this whole tile-creation pass.
+          local bindOk, bindErr = false, nil
+          if multicastDelegatesSupported then
+            bindOk, bindErr = pcall(function()
+              newTile.OnClicked:Add(panel, FName("OnLoadoutClicked"))
+              newTile.OnLoadoutSaved:Add(panel, FName("OnLoadoutSlotSaved"))
+              newTile.OnLoadoutSlotDeleted:Add(panel, FName("OnLoadoutSlotDeleted"))
+            end)
+          end
           if bindOk then
             boundCount = boundCount + 1
           else
-            -- Roll back any binding that DID land before the failure (a half-bound tile on
-            -- the fallback path would double-fire that event), then register the tile for
-            -- the hook-forwarding fallback.
-            pcall(function() newTile.OnClicked:Remove(panel, FName("OnLoadoutClicked")) end)
-            pcall(function() newTile.OnLoadoutSaved:Remove(panel, FName("OnLoadoutSlotSaved")) end)
-            pcall(function() newTile.OnLoadoutSlotDeleted:Remove(panel, FName("OnLoadoutSlotDeleted")) end)
+            if multicastDelegatesSupported then
+              -- Roll back any binding that DID land before the failure (a half-bound tile on
+              -- the fallback path would double-fire that event), then register the tile for
+              -- the hook-forwarding fallback.
+              pcall(function() newTile.OnClicked:Remove(panel, FName("OnLoadoutClicked")) end)
+              pcall(function() newTile.OnLoadoutSaved:Remove(panel, FName("OnLoadoutSlotSaved")) end)
+              pcall(function() newTile.OnLoadoutSlotDeleted:Remove(panel, FName("OnLoadoutSlotDeleted")) end)
+              print(string.format("[MoreLoadoutSlots] Native delegate binding failed for the tile at record index %d - using the hook-forwarding fallback for it. Error: %s\n",
+                recordIndex, tostring(bindErr)))
+            end
             fallbackCount = fallbackCount + 1
-            print(string.format("[MoreLoadoutSlots] Native delegate binding failed for the tile at record index %d - using the hook-forwarding fallback for it. Error: %s\n",
-              recordIndex, tostring(bindErr)))
             pcall(function() ourTileFullNames[newTile:GetFullName()] = true end)
           end
 

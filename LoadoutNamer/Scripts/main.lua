@@ -221,6 +221,53 @@ end
 -- recreate loop that stacked duplicate prompts (2026-07-13 test).
 local promptsByExtra = {} -- [ExtraActionList full name] = { icon = ..., label = ... }
 
+-- Whether this UE4SS build supports writing a mutated struct copy back onto a
+-- property (font/color styling below). Older UE4SS builds don't, and the write
+-- pierces pcall - not a catchable Lua error, it aborts the whole enclosing
+-- function. Probed once per session, on whichever prompt is created first;
+-- success is detected by reaching the line after the risky write, never by
+-- pcall's return value. Deliberately probed AFTER the prompt widgets are
+-- already recorded in promptsByExtra (see ensureRenamePrompt) so a failure
+-- here can never cause the prompt-creation block to retry every tick again.
+local promptStyleProbed = false
+local promptStyleSupported = false
+
+local function applyPromptLabelStyle(label)
+  if promptStyleProbed and not promptStyleSupported then
+    return -- known unsupported on this build; skip the pointless retry
+  end
+  local firstAttempt = not promptStyleProbed
+  promptStyleProbed = true
+
+  pcall(function()
+    local f = label.Font
+    f.Size = 10.0 -- before the font lookup, so a lookup failure can't abort the size
+    local font = StaticFindObject(EDIT_FONT_PATH)
+    if font and font:IsValid() then
+      f.FontObject = font
+    end
+    label.Font = f -- the risky write-back
+    promptStyleSupported = true
+  end)
+
+  if promptStyleSupported then
+    pcall(function()
+      local c = label.ColorAndOpacity
+      c.SpecifiedColor.R = 0.7
+      c.SpecifiedColor.G = 0.7
+      c.SpecifiedColor.B = 0.7
+      c.SpecifiedColor.A = 1.0
+      pcall(function() c.ColorUseRule = 0 end)
+      label.ColorAndOpacity = c
+    end)
+  end
+
+  if firstAttempt then
+    print(string.format("[LoadoutNamer] Rename-prompt label styling: %s.\n",
+      promptStyleSupported and "ok" or "skipped (struct write-back not supported on this UE4SS build)"))
+  end
+end
+
 -- Game thread only. Idempotent - called on every tooltip-poll tick.
 local function ensureRenamePrompt(tooltip, recordIndex)
   local ok, err = pcall(function()
@@ -269,39 +316,23 @@ local function ensureRenamePrompt(tooltip, recordIndex)
       if not label or not label:IsValid() then
         return
       end
-      -- Match the tile text's look (font write-back: reading the struct hands a
-      -- detached copy, so mutate then assign back - same lesson as the edit box style).
-      -- Creation-time only, so the error logs below can't spam.
-      local fOk, fErr = pcall(function()
-        local f = label.Font
-        f.Size = 10.0 -- before the font lookup, so a lookup failure can't abort the size
-        local font = StaticFindObject(EDIT_FONT_PATH)
-        if font and font:IsValid() then
-          f.FontObject = font
-        end
-        label.Font = f
-      end)
-      if not fOk then
-        print("[LoadoutNamer] Rename-prompt label font styling failed: " .. tostring(fErr) .. "\n")
-      end
-      local cOk, cErr = pcall(function()
-        local c = label.ColorAndOpacity
-        c.SpecifiedColor.R = 0.7
-        c.SpecifiedColor.G = 0.7
-        c.SpecifiedColor.B = 0.7
-        c.SpecifiedColor.A = 1.0
-        pcall(function() c.ColorUseRule = 0 end)
-        label.ColorAndOpacity = c
-      end)
-      if not cOk then
-        print("[LoadoutNamer] Rename-prompt label color styling failed: " .. tostring(cErr) .. "\n")
-      end
+
+      -- Style BEFORE the label enters the widget tree, same requirement as the
+      -- edit box (Slate builds its initial layout from whatever's already set;
+      -- styling after AddChild doesn't visually take). On a UE4SS build that
+      -- can't do struct write-back, this may abort this whole function the
+      -- FIRST time only - harmless: applyPromptLabelStyle records "probed"
+      -- before the risky write, so the very next ~50ms tooltip-poll tick skips
+      -- the styling attempt entirely and this function completes normally
+      -- (AddChild + entry recorded), from then on for the rest of the session.
+      applyPromptLabelStyle(label)
 
       extra:AddChild(keyIcon)
       extra:AddChild(label)
       -- Center the label vertically in the action row like the game's own prompt
       -- labels (2 = VAlign_Center). The slot only exists after AddChild.
       pcall(function() label.Slot:SetVerticalAlignment(2) end)
+
       entry = { icon = keyIcon, label = label }
       promptsByExtra[extraName] = entry
       print("[LoadoutNamer] 'F2 Rename' prompt added to the loadout tooltip's action row.\n")
@@ -443,7 +474,22 @@ end
 -- never guess), each group has its own pcall, and any failure just leaves that part
 -- of the box at the engine default. Must run BEFORE the box enters the widget tree
 -- so Slate builds with these values.
+-- Whether whole-struct write-back to WidgetStyle is supported on this UE4SS
+-- build (independent from applyPromptLabelStyle's flag - different struct type,
+-- probed separately). Unlike the tooltip prompt, this only runs once per F2
+-- press (not per tick), so a failure here can't spam the log - but there's no
+-- reason to repeat a known-failing write-back on every rename either.
+local editBoxStyleProbed = false
+local editBoxStyleSupported = false
+
 local function styleEditBox(box)
+  if editBoxStyleProbed and not editBoxStyleSupported then
+    print("[LoadoutNamer] Edit box styling skipped (struct write-back not supported on this UE4SS build).\n")
+    return
+  end
+  local firstAttempt = not editBoxStyleProbed
+  editBoxStyleProbed = true
+
   local fontApplied, fgApplied, bgApplied, writtenBack = false, false, false, false
 
   pcall(function()
@@ -518,11 +564,14 @@ local function styleEditBox(box)
 
     box.WidgetStyle = style -- write the mutated struct back onto the widget
     writtenBack = true
+    editBoxStyleSupported = true
   end)
 
-  print(string.format("[LoadoutNamer] Edit box styling: font=%s, text-color=%s, background=%s, write-back=%s.\n",
-    fontApplied and "ok" or "skipped", fgApplied and "ok" or "skipped", bgApplied and "ok" or "skipped",
-    writtenBack and "ok" or "FAILED"))
+  if firstAttempt then
+    print(string.format("[LoadoutNamer] Edit box styling: font=%s, text-color=%s, background=%s, write-back=%s.\n",
+      fontApplied and "ok" or "skipped", fgApplied and "ok" or "skipped", bgApplied and "ok" or "skipped",
+      writtenBack and "ok" or "FAILED"))
+  end
 end
 
 -- ============================== rename session ==============================

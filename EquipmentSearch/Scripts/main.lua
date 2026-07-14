@@ -149,6 +149,18 @@ resolveStatTextFields()
 -- '!?' in the search box lists them
 local nameOnlyItems = {}
 
+-- Whether this UE4SS build's reflection can resolve the InspectObject property
+-- on Stats/Mods struct entries (the "belt-and-braces" fallback below). On a
+-- build without it, the read errors with "unable to retrieve property
+-- 'InspectObject'" and pierces pcall - not a catchable Lua error, it aborts
+-- the whole enclosing function - and since extractTexts runs on every cache
+-- pass (every keystroke, every watchdog tick), an unguarded retry here floods
+-- the log continuously and breaks search entirely (2026-07-14 stable-UE4SS
+-- test). Probed once per session; the "probed" flag is set BEFORE the risky
+-- read so it survives even if the read aborts this whole function.
+local inspectObjectProbed = false
+local inspectObjectSupported = false
+
 -- Pull display strings out of a Stats/Mods array. Out-param arrays arrive as
 -- Lua tables of LocalUnrealParam-wrapped structs; arrays read off a returned
 -- struct arrive as TArray userdata (# and [i] indexing).
@@ -184,10 +196,14 @@ local function extractTexts(arr, parts, fields)
                 end)
             end
             -- belt-and-braces: entries that yielded no Description text may
-            -- reference a perk object that owns display text of its own
-            if not gotText then
+            -- reference a perk object that owns display text of its own.
+            -- Skipped entirely once known unsupported on this build (see
+            -- inspectObjectProbed above).
+            if not gotText and not (inspectObjectProbed and not inspectObjectSupported) then
+                inspectObjectProbed = true
                 pcall(function()
-                    local obj = unwrapped.InspectObject
+                    local obj = unwrapped.InspectObject -- the risky read
+                    inspectObjectSupported = true
                     if obj == nil or not obj:IsValid() then return end
                     for _, field in ipairs({ "Description", "Label", "TooltipText" }) do
                         pcall(function()
