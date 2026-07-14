@@ -15,12 +15,36 @@ Each mod works standalone. See each mod's own README for details, and its
 ## Requirements
 
 - Remnant 2 (Steam/PC)
-- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) — experimental-latest build
+- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) — **either** the experimental-latest
+  build **or** stable v3.0.1 (see below for which one you need).
+
+## Which UE4SS build should I use?
+
+These mods work on **both** UE4SS build lines, but they aren't fully
+interchangeable — pick based on whether you also use asset/pak mods:
+
+| | UE4SS experimental-latest | UE4SS stable (v3.0.1 Beta) |
+|---|---|---|
+| **Use this if...** | You don't use `AllowModsMod` ("Allow Asset Mods") or other pak-based asset mods. | You use `AllowModsMod` or other asset/pak mods — they require the stable ABI and will fail to load (or crash) on experimental-latest. |
+| **Mod folder location** | `<Remnant2>\Binaries\Win64\ue4ss\Mods\` | `<Remnant2>\Binaries\Win64\Mods\` (no `ue4ss` subfolder) |
+| MoreLoadoutSlots | Full native behavior. | Fully functional via an automatic fallback path. First Loadouts-screen open after launch may not show the extra slots — close and reopen the screen (or hot-reload) once to fix it for the rest of the session. |
+| LoadoutNamer | Full native behavior, fully styled. | Fully functional, but the rename text box and the tooltip's "F2 Rename" text use the plain engine look instead of the game's styled font/colors. Purely cosmetic. |
+| EquipmentSearch | Full native behavior. | Fully functional, filtering works identically. |
+
+Everything above is handled automatically — there's no setting to flip. Just
+install the matching UE4SS build for your situation and the mods detect and
+adapt to it on their own.
+
+If you're not using any asset/pak mods, experimental-latest is the simpler
+choice with no cosmetic caveats.
 
 ## Installation
 
-1. Copy the mod folder(s) you want into `<Remnant2>\Binaries\Win64\ue4ss\Mods\`.
-2. Add a line for each in `ue4ss\Mods\mods.txt`, e.g.:
+1. Copy the mod folder(s) you want into your UE4SS Mods folder — the path
+   depends on which build you installed (see table above):
+   - Experimental-latest: `<Remnant2>\Binaries\Win64\ue4ss\Mods\`
+   - Stable: `<Remnant2>\Binaries\Win64\Mods\`
+2. Add a line for each mod in that folder's `mods.txt`, e.g.:
    ```
    MoreLoadoutSlots : 1
    LoadoutNamer : 1

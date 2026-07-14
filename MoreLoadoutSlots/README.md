@@ -16,12 +16,17 @@ Raises the Character screen's loadout count from **8 to 20**.
 ## Requirements
 
 - Remnant 2 (Steam/PC)
-- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) — experimental-latest build
+- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) — either experimental-latest or
+  stable v3.0.1 Beta. **See the [repo README](../README.md#which-ue4ss-build-should-i-use)
+  for which one you need** — it depends on whether you also use asset/pak mods
+  like `AllowModsMod`.
 
 ## Installation
 
-1. Copy the `MoreLoadoutSlots` folder into `<Remnant2>\Binaries\Win64\ue4ss\Mods\`.
-2. Add a line for it in `ue4ss\Mods\mods.txt`:
+1. Copy the `MoreLoadoutSlots` folder into your UE4SS Mods folder:
+   - Experimental-latest: `<Remnant2>\Binaries\Win64\ue4ss\Mods\`
+   - Stable: `<Remnant2>\Binaries\Win64\Mods\`
+2. Add a line for it in that folder's `mods.txt`:
    ```
    MoreLoadoutSlots : 1
    ```
@@ -33,6 +38,10 @@ Raises the Character screen's loadout count from **8 to 20**.
 - Saving/equipping into an extra slot while in another player's co-op session
   is untested (should work, following the same rules as vanilla slots, but
   hasn't been verified).
+- **On stable UE4SS only**: the extra slots may not appear the very first time
+  you open the Loadouts screen after launch (a pre-existing UE4SS quirk on
+  stable, not caused by this mod) — close and reopen the screen once (or
+  hot-reload) and they'll show up for the rest of the session.
 
 ## License
 

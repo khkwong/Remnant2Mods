@@ -4,6 +4,6 @@
   "ModAuthor": "livingpillow",
   "ModDescription": "Adds a working, always-visible search bar to every inventory item grid (rings, amulets, armor, relics, weapons, materials/quest/usable), filtering live by name and gameplay-effect text.",
   "License": "MIT",
-  "Requires": "UE4SS (experimental-latest build)",
+  "Requires": "UE4SS (experimental-latest or stable v3.0.1 Beta)",
   "Game": "Remnant 2 (Steam/PC)"
 }

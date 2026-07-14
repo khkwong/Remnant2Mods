@@ -16,12 +16,17 @@ A working search bar for your inventory.
 ## Requirements
 
 - Remnant 2 (Steam/PC)
-- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) — experimental-latest build
+- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) — either experimental-latest or
+  stable v3.0.1 Beta. **See the [repo README](../README.md#which-ue4ss-build-should-i-use)
+  for which one you need** — it depends on whether you also use asset/pak mods
+  like `AllowModsMod`.
 
 ## Installation
 
-1. Copy the `EquipmentSearch` folder into `<Remnant2>\Binaries\Win64\ue4ss\Mods\`.
-2. Add a line for it in `ue4ss\Mods\mods.txt`:
+1. Copy the `EquipmentSearch` folder into your UE4SS Mods folder:
+   - Experimental-latest: `<Remnant2>\Binaries\Win64\ue4ss\Mods\`
+   - Stable: `<Remnant2>\Binaries\Win64\Mods\`
+2. Add a line for it in that folder's `mods.txt`:
    ```
    EquipmentSearch : 1
    ```
@@ -32,6 +37,7 @@ A working search bar for your inventory.
 - The search filter resets when you switch tabs on the Inventory screen.
 - An upgraded item keeps its old "+N" text in the search cache until you
   relaunch (its name still matches fine in the meantime).
+- Works identically on both UE4SS builds — no stable-only caveats for this mod.
 
 ## License
 

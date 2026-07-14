@@ -21,12 +21,17 @@ on its own with the vanilla 8-slot panel.
 ## Requirements
 
 - Remnant 2 (Steam/PC)
-- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) — experimental-latest build
+- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) — either experimental-latest or
+  stable v3.0.1 Beta. **See the [repo README](../README.md#which-ue4ss-build-should-i-use)
+  for which one you need** — it depends on whether you also use asset/pak mods
+  like `AllowModsMod`.
 
 ## Installation
 
-1. Copy the `LoadoutNamer` folder into `<Remnant2>\Binaries\Win64\ue4ss\Mods\`.
-2. Add a line for it in `ue4ss\Mods\mods.txt`:
+1. Copy the `LoadoutNamer` folder into your UE4SS Mods folder:
+   - Experimental-latest: `<Remnant2>\Binaries\Win64\ue4ss\Mods\`
+   - Stable: `<Remnant2>\Binaries\Win64\Mods\`
+2. Add a line for it in that folder's `mods.txt`:
    ```
    LoadoutNamer : 1
    ```
@@ -38,6 +43,11 @@ on its own with the vanilla 8-slot panel.
 - The reserved "Last Gear State" auto-save slot can't be renamed.
 - The edit box is a styled engine text box — close to the game's look, but
   not pixel-identical.
+- **On stable UE4SS only**: the rename text box and the tooltip's "F2 Rename"
+  text fall back to the plain engine font/color instead of the game's styled
+  look (cosmetic only — renaming still works fully). You may also see repeated
+  harmless log lines about the rename prompt on stable; this doesn't affect
+  gameplay.
 
 ## License
 

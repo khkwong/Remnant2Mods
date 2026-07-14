@@ -4,6 +4,6 @@
   "ModAuthor": "livingpillow",
   "ModDescription": "Custom names for loadout slots on the Character screen. Hover a tile and press F2 to rename it; names persist across sessions.",
   "License": "MIT",
-  "Requires": "UE4SS (experimental-latest build)",
+  "Requires": "UE4SS (experimental-latest or stable v3.0.1 Beta)",
   "Game": "Remnant 2 (Steam/PC)"
 }
