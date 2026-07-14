@@ -8,7 +8,7 @@ Status: **feature-complete and user-confirmed** as of 2026-07-13. Source: `Loado
 - **Display**: names render via `tile.LabelOverride` + `Refresh()`, re-applied whenever the panel is constructed (waits for MoreLoadoutSlots' 20 tiles). Tile shows at most 18 chars (`..`-truncated); the hover tooltip's title (`ItemLabel`) shows the full name (cap 32).
 - **Tooltip integration**: title swap per hover, plus an "F2 Rename" prompt injected into the tooltip's `ExtraActionList` action row (hidden on the Last Gear State tile).
 - **Persistence**: `ue4ss/Mods/LoadoutNamer/loadout_names.txt`, tab-separated `recordIndex<TAB>name` lines, whole-file rewrite on every commit. Tabs/newlines stripped from names on commit.
-- **Tab-hotkey suppression**: during an edit, the Traits/Inventory/Map tab buttons are set Hidden (visibility 2, keeps layout space) so T/I/M can't yank the menu; restored on every exit path. See TODO.md — this may be unnecessary (a focused box may consume letters by itself).
+- **Tab-hotkey suppression**: during an edit, the Traits/Inventory/Map tab buttons are set Hidden (visibility 2, keeps layout space) so T/I/M can't yank the menu; restored on every exit path. Confirmed necessary 2026-07-14: EquipmentSearch proved a focused, character-receiving text box does NOT block the hotkey dispatch (TODO.md, research doc §3.6c).
 
 ## Key implementation facts
 
@@ -21,7 +21,7 @@ Status: **feature-complete and user-confirmed** as of 2026-07-13. Source: `Loado
 
 ## Known warts / deliberate scope cuts
 
-- T/I/M suppression may be redundant (see TODO.md — falsification test described there). U/J/O/P/B menu hotkeys are unsuppressed and appear harmless while typing.
+- U/J/O/P/B menu hotkeys are unsuppressed and appear harmless while typing (unexplained, given T/I/M demonstrably needed suppression — see TODO.md).
 - Edit box is still an engine `EditableTextBox` with tinted default brushes — close to native, not pixel-identical (no cracked border art).
 - Names are per-install, not per-character/save: all characters share the record-index → name map.
 - Multiplayer: rename flow untested in co-op sessions (tooltip/panel paths follow the GetOwningPlayer rule, so no known hazard — just unverified).

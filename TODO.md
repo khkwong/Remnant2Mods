@@ -2,7 +2,19 @@
 
 ## Was the T/I/M tab-hotkey suppression ever actually needed?
 
-Status as of 2026-07-13 (LoadoutNamer, tab-hotkey work):
+**RESOLVED 2026-07-14 (EquipmentSearch): yes, keep it.** The equipment-screen
+search box was definitely focused — every keystroke landed in the box and fired
+its `TextChanged` event — and typing **M** still navigated to the map. So a
+focused `EditableTextBox` receiving characters does NOT stop the menu's hotkey
+dispatch; the "focused box consumes letters by itself" hypothesis below is
+falsified, and LoadoutNamer's suppression stays. (Why U/J/O/P/B seemed inert
+during LoadoutNamer edits remains unexplained — possibly context-gated on that
+screen — but it no longer matters: the suppression is demonstrably load-bearing.)
+EquipmentSearch now suppresses the same three tabs while its box has focus,
+using the filter widget's `OnAddedToFocusPath`/`OnRemovedFromFocusPath`
+overrides as the session boundary (research doc §3.6c).
+
+Original status as of 2026-07-13 (LoadoutNamer, tab-hotkey work):
 
 - Full in-game-menu letter-hotkey map (user-tested, keyboard): **T** Traits, **I** Inventory, **M** Map, **U** Fragments, **J** Character, **O** System, **P** Archetype, **B** closes the menu entirely, **Q/E** scroll tabs. Dispatch for T/I/M confirmed as `Widget_InGameMenu_C:FocusTraits/FocusInventory/FocusMap` (research doc §3.4aa); the others presumably have sibling `Focus*` functions.
 - LoadoutNamer currently suppresses only T/I/M during a rename by hiding those three tab buttons (`SetVisibility(2)`; the game's `Focus*` functions early-out on the tab's `IsVisible()`).

@@ -1,27 +1,28 @@
-print("[ZZTestMod] Loaded and running (idle - no active diagnostic).\n")
+print("[ZZTestMod] Loaded - idle (no active probes).\n")
 
--- Research scratchpad only. Feature code lives in MoreLoadoutSlots/Scripts/main.lua
--- and LoadoutNamer/Scripts/main.lua.
+-- Research scratchpad only. Feature code lives in MoreLoadoutSlots/,
+-- LoadoutNamer/, and EquipmentSearch/ (each <Mod>/Scripts/main.lua).
 --
--- Currently idle. Past diagnostics are recoverable from git history:
---   - InGameMenu tab-hotkey probe (T/I/M dispatch through Widget_InGameMenu_C:
---     FocusTraits/FocusInventory/FocusMap; SetIsEnabled(false) on the tab buttons
---     does NOT block the hotkeys, SetVisibility(2)=Hidden DOES - the Focus*
---     functions early-out on the tab's IsVisible(). Research doc 3.4aa.)
---   - LoadoutNamer probe round 1 (P1: LabelOverride on vanilla tiles survives the
---     game's own equip/delete/save-over refreshes - PASSED. P2: raw EditableTextBox
---     injection renders, takes focus, accepts typing in menu context; Text readable
---     via box.Text:ToString() - PASSED. Research doc 3.4y.)
---   - LoadoutNamer probe round 2 (F2 RegisterKeyBind fires while the UI has focus,
---     even mid-typing; OnMouseEnter BndEvt hook gives hover identity; edit box in the
---     tile's title row live-updates LabelOverride; Index=10 tile = the character
---     screen's "Last Gear State". Research doc 3.4z.)
---   - LoadoutComponent Slots/NumRecords structure dump
---   - RegisterHook self:get() safety test (PASSED - always unwrap with self:get(),
---     never touch the raw RemoteUnrealParam wrapper)
---   - Three-path input logger (mapped F/Space/RMB/LMB to their dispatch paths and the
---     E_TooltipContextAction enum byte values)
---   - First-launch NotifyOnNewObject quirk diagnostic (obsolete: fixed by the UE4SS
---     experimental-latest upgrade)
---   - Multicast delegate stage-1 test (PASSED under experimental UE4SS: API is
---     delegate:Add(targetUObject, FName("FunctionName")))
+-- IDLE. Last campaign: EquipmentSearch probe rounds P1-P8 (2026-07), all
+-- concluded; findings recorded in docs/remnant2-modding-research.md 3.6b.
+-- Summary of what they proved:
+--   P1 (F2): unhiding Widget_InventorySearchFilter_C + SearchFilterText works;
+--       the CanSeeSearchBar gate binding is inert after construction.
+--   P4 (F3): card:Get_InspectInfo({}) out-param spreading works; ItemID is a
+--       plain readable property on Widget_InventoryItem_C.
+--   P5 (F4): HAZARD - UE4SS zero-fills synthesized struct params; ToString()
+--       on a zero-filled FText is a native crash pcall cannot catch. Passing a
+--       REAL info struct into ModifyInspectInfo doesn't crash but changes
+--       nothing -> re-invoking the game's inspect pipeline is a dead end.
+--   P6 (F5): HAZARD - ForEachProperty does NOT walk super-structs; InspectStat
+--       inherits InspectStatBase (Label, CustomDescription, ...). Walk
+--       GetSuperStruct() or field lists are silently incomplete. Also:
+--       Widget_ItemTooltip_C:GetInspectInfo hook never fires on hover.
+--   P7 (F6): trigger-ring effect text lives in Stats[].CustomDescription
+--       (inherited field); stat-ring effect text in Mods[].Label.
+--   P8 (F7): reading CustomDescription on Stats entries is safe for all 213
+--       rings -> the earlier full-sweep crash was reading a Stats-only field
+--       on Mods entries (structs differ per array; per-array field lists fix).
+--
+-- Older diagnostics (loadout probes, input logger, delegate Add() test, chain
+-- tracers) are all recoverable from git history.

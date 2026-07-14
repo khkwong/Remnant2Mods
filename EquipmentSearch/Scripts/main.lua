@@ -11,8 +11,14 @@ print("[EquipmentSearch] Loaded and running.\n")
 -- early-outs when nothing changed, so the matching AND the hiding are ours:
 -- on query change we walk the grid's card children and SetVisibility per
 -- match. Matching text per ItemID comes from each card's Get_InspectInfo
--- (Label/SubLabel/FlavorText plus the Stats/Mods effect arrays), cached per
--- session. Full findings: docs/remnant2-modding-research.md 3.6b.
+-- (Label/SubLabel plus the Stats/Mods effect arrays; lore Description and
+-- FlavorText deliberately excluded), cached per session.
+-- Full findings: docs/remnant2-modding-research.md 3.6b.
+--
+-- Debug commands (type into the search box):
+--   !<word>  print the FULL cached text of every item containing <word>
+--   !!       clear the text cache (next keystroke rebuilds it fresh)
+--   !?       list items whose cache is name-only (can't match effect search)
 
 local LIST_CLASS_PATH = "/Game/UI/UI_Inventory/Widget_InventoryList.Widget_InventoryList_C"
 local FILTER_CLASS = "/Game/UI/UI_Inventory/Widget_InventorySearchFilter.Widget_InventorySearchFilter_C"
@@ -28,6 +34,11 @@ local XBUTTON_FUNC_PATH = FILTER_CLASS
 -- 'Build Inventory List' covers popup reopen / tab construction)
 local LIST_UPDATE_FUNC_PATH = LIST_CLASS_PATH .. ":Update Inventory List"
 local LIST_BUILD_FUNC_PATH  = LIST_CLASS_PATH .. ":Build Inventory List"
+-- the filter widget overrides these focus-path events (dump ~1705); they fire
+-- when keyboard focus enters/leaves the search box - the typing-session
+-- boundary for tab-hotkey suppression
+local FOCUS_ADDED_FUNC_PATH   = FILTER_CLASS .. ":OnAddedToFocusPath"
+local FOCUS_REMOVED_FUNC_PATH = FILTER_CLASS .. ":OnRemovedFromFocusPath"
 
 local VISIBLE   = 0  -- ESlateVisibility::Visible
 local COLLAPSED = 1  -- ESlateVisibility::Collapsed
@@ -67,7 +78,13 @@ end
 -- LocalUnrealParam wrappers (probed) that need :get() before field access.
 -- Field names are resolved once at load via reflection: InspectInfo's array
 -- properties -> inner struct -> its Text/Str-typed fields.
-local statTextFields = {} -- e.g. { "Label", "Value" } - filled at load
+-- PER-ARRAY lists: Stats entries (InspectStat) and Mods entries (InspectMod)
+-- have different structs, and reading a field name on a struct that doesn't
+-- own it hard-crashes. The shared-list version crashed the full cache pass
+-- (2026-07-14) by trying Stats' CustomDescription on Mods entries; probe P8
+-- proved reading CustomDescription on Stats entries alone is safe for all
+-- 213 rings.
+local statTextFields = { Stats = {}, Mods = {} }
 
 local function resolveStatTextFields()
     local ok, err = pcall(function()
@@ -76,7 +93,6 @@ local function resolveStatTextFields()
             print("[EquipmentSearch] InspectInfo struct not found for reflection\n")
             return
         end
-        local seen = {}
         infoStruct:ForEachProperty(function(prop)
             local okProp = pcall(function()
                 local full = prop:GetFullName() -- "ArrayProperty /Script/...:Stats"
@@ -86,29 +102,42 @@ local function resolveStatTextFields()
                 if not inner then return end
                 local innerStruct = inner:GetStruct()
                 if not innerStruct or not innerStruct:IsValid() then return end
-                print("[EquipmentSearch] " .. propName .. " entry struct: "
-                    .. innerStruct:GetFullName() .. "\n")
-                innerStruct:ForEachProperty(function(fieldProp)
-                    pcall(function()
-                        local ffull = fieldProp:GetFullName()
-                        print("[EquipmentSearch]   field: " .. ffull .. "\n")
-                        local ftype, fname = string.match(ffull, "^(%w+) .*:(%w+)$")
-                        -- FlavorText excluded by user decision: lore quotes are
-                        -- not gameplay text and caused surprising matches.
-                        -- NOTE: InspectMod.Label is where ring effect text
-                        -- actually lives (removing it emptied all 213 caches);
-                        -- Description is unused on rings.
-                        if (ftype == "TextProperty" or ftype == "StrProperty")
-                           and fname and fname ~= "FlavorText" and not seen[fname] then
-                            seen[fname] = true
-                            statTextFields[#statTextFields + 1] = fname
-                        end
+                local fields = statTextFields[propName]
+                local seen = {}
+                -- Walk the SUPER chain too: InspectStat inherits
+                -- InspectStatBase, whose CustomDescription carries the
+                -- trigger-ring effect text - ForEachProperty alone only sees
+                -- a struct's own fields and missed it (probe P6/P7).
+                local s = innerStruct
+                local depth = 0
+                while s and s:IsValid() and depth < 6 do
+                    s:ForEachProperty(function(fieldProp)
+                        pcall(function()
+                            local ffull = fieldProp:GetFullName()
+                            local ftype, fname = string.match(ffull, "^(%w+) .*:(%w+)$")
+                            -- FlavorText excluded by user decision: lore quotes
+                            -- are not gameplay text and caused surprising
+                            -- matches. NOTE: effect text lives in
+                            -- InspectMod.Label for stat-style rings and in
+                            -- InspectStatBase.CustomDescription for
+                            -- trigger-style rings; Description is unused.
+                            if (ftype == "TextProperty" or ftype == "StrProperty")
+                               and fname and fname ~= "FlavorText"
+                               and not seen[fname] then
+                                seen[fname] = true
+                                fields[#fields + 1] = fname
+                            end
+                        end)
                     end)
-                end)
+                    local okSuper, super = pcall(function() return s:GetSuperStruct() end)
+                    s = okSuper and super or nil
+                    depth = depth + 1
+                end
             end)
         end)
-        print("[EquipmentSearch] stat text fields: "
-            .. table.concat(statTextFields, ", ") .. "\n")
+        print("[EquipmentSearch] stat text fields - Stats: "
+            .. table.concat(statTextFields.Stats, ", ")
+            .. " | Mods: " .. table.concat(statTextFields.Mods, ", ") .. "\n")
     end)
     if not ok then
         print("[EquipmentSearch] stat field reflection FAILED: " .. tostring(err) .. "\n")
@@ -116,66 +145,14 @@ local function resolveStatTextFields()
 end
 resolveStatTextFields()
 
--- One-time reflection of the native Item:GetInspectInfo (the call the item
--- tooltip uses to build the COMPLETE inspect info - trigger-style rings like
--- Disaster Converter get their effect text only through this path).
-do
-    local ok, err = pcall(function()
-        local fn = StaticFindObject("/Script/GunfireRuntime.Item:GetInspectInfo")
-        if not fn or not fn:IsValid() then
-            print("[EquipmentSearch] Item:GetInspectInfo not found via reflection\n")
-            return
-        end
-        print("[EquipmentSearch] Item:GetInspectInfo params:\n")
-        fn:ForEachProperty(function(prop)
-            pcall(function()
-                print("[EquipmentSearch]   " .. prop:GetFullName() .. "\n")
-            end)
-        end)
-    end)
-    if not ok then
-        print("[EquipmentSearch] GetInspectInfo reflection error: " .. tostring(err) .. "\n")
-    end
-end
-
--- One-time reflection of the InventoryItem struct (what the card's
--- Get_InventoryItem returns) - looking for the field holding the item's BP
--- class, whose default object is the receiver for Item:GetInspectInfo.
-do
-    local ok, err = pcall(function()
-        local s = StaticFindObject("/Script/GunfireRuntime.InventoryItem")
-        if not s or not s:IsValid() then
-            print("[EquipmentSearch] InventoryItem struct not found via reflection\n")
-            return
-        end
-        print("[EquipmentSearch] InventoryItem fields:\n")
-        s:ForEachProperty(function(prop)
-            pcall(function()
-                print("[EquipmentSearch]   " .. prop:GetFullName() .. "\n")
-            end)
-        end)
-    end)
-    if not ok then
-        print("[EquipmentSearch] InventoryItem reflection error: " .. tostring(err) .. "\n")
-    end
-end
-
--- one-time diagnostic of what InspectObject actually points at (trim later)
-local dumpedInspectObject = false
-local dumpedInventoryItem = false
-local dumpedFallbackActor = false
-
 -- ItemIDs whose cached text is name-only (no effect text found anywhere);
 -- '!?' in the search box lists them
 local nameOnlyItems = {}
 
--- the native-call fallback self-disables after this many errors
-local fallbackErrors = 0
-
 -- Pull display strings out of a Stats/Mods array. Out-param arrays arrive as
 -- Lua tables of LocalUnrealParam-wrapped structs; arrays read off a returned
 -- struct arrive as TArray userdata (# and [i] indexing).
-local function extractTexts(arr, parts)
+local function extractTexts(arr, parts, fields)
     local entries = {}
     if type(arr) == "table" then
         for _, e in pairs(arr) do entries[#entries + 1] = e end
@@ -194,7 +171,7 @@ local function extractTexts(arr, parts)
                 if okGet and inner ~= nil then unwrapped = inner end
             end
             local gotText = false
-            for _, field in ipairs(statTextFields) do
+            for _, field in ipairs(fields) do
                 pcall(function()
                     local v = unwrapped[field]
                     if v ~= nil then
@@ -206,17 +183,12 @@ local function extractTexts(arr, parts)
                     end
                 end)
             end
-            -- trigger-style effects (Disaster Converter etc.) ship an empty
-            -- Description; their text lives on the referenced perk object
+            -- belt-and-braces: entries that yielded no Description text may
+            -- reference a perk object that owns display text of its own
             if not gotText then
                 pcall(function()
                     local obj = unwrapped.InspectObject
                     if obj == nil or not obj:IsValid() then return end
-                    if not dumpedInspectObject then
-                        dumpedInspectObject = true
-                        print("[EquipmentSearch] DIAG InspectObject: "
-                            .. obj:GetFullName() .. "\n")
-                    end
                     for _, field in ipairs({ "Description", "Label", "TooltipText" }) do
                         pcall(function()
                             local v = obj[field]
@@ -266,10 +238,11 @@ local function ensureItemTextCache(list)
                         if okStr and str then parts[#parts + 1] = str end
                     end
                 end
-                -- the gameplay-effect text ("Increases Melee damage...") lives
-                -- in the Mods array's Label field, not on InspectInfo itself
-                extractTexts(info.Stats, parts)
-                extractTexts(info.Mods, parts)
+                -- gameplay-effect text lives in the arrays, not on InspectInfo
+                -- itself: Mods[].Label for stat-style items,
+                -- Stats[].CustomDescription for trigger-style items
+                extractTexts(info.Stats, parts, statTextFields.Stats)
+                extractTexts(info.Mods, parts, statTextFields.Mods)
 
                 -- "no effect text" means: nothing beyond Label/SubLabel except
                 -- name echoes (Momentum Driver's mod Label repeats the item
@@ -282,119 +255,9 @@ local function ensureItemTextCache(list)
                     if p ~= "" and p ~= labelNorm then hasEffect = true end
                 end
 
-                -- fallback for trigger-style items (30 rings, listed by '!?'):
-                -- their effect text is GENERATED at display time by each
-                -- ring's ModifyInspectInfo override (FText::Format - see
-                -- Ring_OfferingStone.json ~318), not stored anywhere readable.
-                -- Calling ModifyInspectInfo from the cache loop hard-crashed
-                -- the game (2026-07-14); the call is DISABLED here until the
-                -- ZZTestMod single-item probe (F4) finds a safe calling
-                -- convention. Until then these 30 match by name only.
-                if false and not hasEffect and fallbackErrors < 3 then
-                    local okFb, fbErr = pcall(function()
-                        local inv = {}
-                        card:Get_InventoryItem(inv)
-                        local bp = inv.ItemBP
-                        pcall(function() bp = bp:get() end)
-                        if bp == nil or not bp:IsValid() then return end
-
-                        -- the class's default object is the callable Item
-                        local cdo = nil
-                        pcall(function() cdo = bp:GetCDO() end)
-                        if cdo == nil or not cdo:IsValid() then
-                            -- fallback: build the Default__ object path from
-                            -- the class full name
-                            local full = bp:GetFullName()
-                            local path = string.match(full, "%s(.+)$") or full
-                            local pkg, cls = string.match(path, "^(.*)%.([^%.]+)$")
-                            if pkg and cls then
-                                cdo = StaticFindObject(pkg .. ".Default__" .. cls)
-                            end
-                        end
-                        if cdo == nil or not cdo:IsValid() then
-                            print("[EquipmentSearch] fallback: no CDO for "
-                                .. tostring(bp:GetFullName()) .. "\n")
-                            return
-                        end
-
-                        local instance = inv.InstanceData
-                        pcall(function() instance = instance:get() end)
-
-                        -- Actor=nil returned Mods len=0 (Offering Stone dump):
-                        -- no effect text. Trigger-effect text is presumably
-                        -- computed against the owning actor, so pass the
-                        -- player character (the instance data's outer).
-                        local actor = nil
-                        pcall(function()
-                            local outer = instance:GetOuter()
-                            if outer and outer:IsValid() then actor = outer end
-                        end)
-                        if actor == nil then
-                            pcall(function()
-                                local pawn = FindFirstOf("Character_Master_Player_C")
-                                if pawn and pawn:IsValid() then actor = pawn end
-                            end)
-                        end
-                        if not dumpedFallbackActor and actor ~= nil then
-                            dumpedFallbackActor = true
-                            print("[EquipmentSearch] DIAG fallback Actor: "
-                                .. actor:GetFullName() .. "\n")
-                        end
-
-                        -- The effect text is GENERATED, not stored: trigger
-                        -- rings override ModifyInspectInfo(Actor, InInstance-
-                        -- Data, Info ref, HideBaseStats out) and build the
-                        -- sentence with FText::Format (Ring_OfferingStone.json
-                        -- ~318). Call it on the CDO with an empty Info: lore
-                        -- comes from the base item data we are NOT passing in,
-                        -- so whatever lands in Info is pure effect text.
-                        local infoOut = {}
-                        local hbsOut = {}
-                        cdo:ModifyInspectInfo(actor, instance, infoOut, hbsOut)
-                        if not dumpedInventoryItem then
-                            dumpedInventoryItem = true
-                            print(string.format(
-                                "[EquipmentSearch] DIAG ModifyInspectInfo ItemID=%d via %s returned:\n",
-                                id, cdo:GetFullName()))
-                            for k, v in pairs(infoOut) do
-                                local val = v
-                                pcall(function() val = v:get() end)
-                                local desc = tostring(val)
-                                pcall(function() desc = val:ToString() end)
-                                pcall(function() desc = val:GetFullName() end)
-                                pcall(function() desc = desc .. " (len=" .. #val .. ")" end)
-                                print(string.format("[EquipmentSearch]   .%s = %s\n",
-                                    tostring(k), desc))
-                            end
-                        end
-                        pcall(function()
-                            local d = infoOut.Description
-                            pcall(function() d = d:get() end)
-                            if d ~= nil then
-                                local okStr, s = pcall(function() return d:ToString() end)
-                                if okStr and s and s ~= "" then parts[#parts + 1] = s end
-                            end
-                        end)
-                        extractTexts(infoOut.Stats, parts)
-                        extractTexts(infoOut.Mods, parts)
-                    end)
-                    if not okFb then
-                        fallbackErrors = fallbackErrors + 1
-                        print("[EquipmentSearch] item-object fallback error ("
-                            .. fallbackErrors .. "/3): " .. tostring(fbErr) .. "\n")
-                    end
-                end
-
-                -- anything still name-only here won't match description
-                -- searches - '!?' lists these (the known-limitation set).
-                -- Recheck: the fallback may have appended parts above.
-                if not hasEffect then
-                    for i = 3, #parts do
-                        local p = normalizeText(parts[i])
-                        p = string.match(p, "^%s*(.-)%s*$")
-                        if p ~= "" and p ~= labelNorm then hasEffect = true end
-                    end
-                end
+                -- anything still name-only here won't match effect searches -
+                -- '!?' lists these (0 for all 213 rings as of 2026-07-14; a
+                -- game patch could reintroduce some, hence the diagnostic)
                 nameOnlyItems[id] = (not hasEffect) or nil
                 itemTextCache[id] = normalizeText(table.concat(parts, " "))
                 added = added + 1
@@ -441,12 +304,6 @@ local function applyFilter(entry, verbose)
                         hiddenCardVis[key] = nil
                     end
                     shown = shown + 1
-                    -- diagnostic (trim later): what text did the first few
-                    -- matches match on?
-                    if verbose and query ~= "" and shown <= 3 then
-                        print(string.format("[EquipmentSearch]   match ItemID=%d text='%s'\n",
-                            id, string.sub(text or "<nil>", 1, 120)))
-                    end
                 else
                     if hiddenCardVis[key] == nil then
                         hiddenCardVis[key] = card.Visibility
@@ -461,9 +318,10 @@ local function applyFilter(entry, verbose)
         print("[EquipmentSearch] applyFilter error: " .. tostring(applyErr) .. "\n")
         return
     end
+    -- one line per committed keystroke; silent on watchdog/rebuild passes
     if verbose then
         print(string.format("[EquipmentSearch] filter applied: %d shown, %d hidden\n",
-            shown, hidden)) -- test aid, trim later
+            shown, hidden))
     end
 end
 
@@ -478,7 +336,8 @@ local function refreshAllLists(forceApply)
             end
             local query = normalizeText(entry.box.Text:ToString())
             query = string.match(query, "^%s*(.-)%s*$") -- trim edges
-            -- debug commands (trim before release): '!<word>' dumps the FULL
+            -- debug commands (kept in the shipped mod - see file header):
+            -- '!<word>' dumps the FULL
             -- cached text of every item containing <word>; '!!' clears the
             -- cache so the next keystroke rebuilds it fresh; '!?' lists every
             -- item whose cache is name-only (won't match description search)
@@ -511,7 +370,6 @@ local function refreshAllLists(forceApply)
             end
             if query ~= entry.query then
                 entry.query = query
-                print("[EquipmentSearch] query: '" .. query .. "'\n") -- test aid
                 ensureItemTextCache(entry.list)
                 applyFilter(entry, true)
             elseif forceApply and query ~= "" then
@@ -556,6 +414,58 @@ local function showSearchBar(list)
     return true, box
 end
 
+-- ---------- tab hotkey suppression (LoadoutNamer's proven trick) ----------
+-- Typing M in the search box also fires the menu's map-tab hotkey and yanks
+-- the screen away mid-word. UE4SS can't consume input, but the game gates
+-- each tab switch on the tab BUTTON's own visibility (Focus* handlers fire
+-- regardless, then early-out on an IsVisible check - LoadoutNamer probe).
+-- So: hide the tab buttons while the search box has keyboard focus.
+-- Hidden (ESlateVisibility 2), NOT Collapsed, keeps their layout space so the
+-- tab bar doesn't reflow. Restore only what we hid. A leaked Hidden state
+-- (screen closed mid-focus) self-heals: the game resets tab visibility when
+-- the menu reopens.
+local TAB_HOTKEY_PROPS = { "TraitTab", "InventoryTab", "MapTab" }
+local hiddenTabs = {}
+
+-- Game thread only.
+local function suppressTabHotkeys()
+    local menu = nil
+    pcall(function()
+        local all = FindAllOf("Widget_InGameMenu_C")
+        if all then
+            for _, m in ipairs(all) do
+                if m:IsValid() and not m:GetFullName():find("Default__") then
+                    menu = m
+                end
+            end
+        end
+    end)
+    if not menu then return end
+    for _, prop in ipairs(TAB_HOTKEY_PROPS) do
+        pcall(function()
+            local tab = menu[prop]
+            -- only touch tabs the game is currently showing, so restore can't
+            -- force-show a tab the game itself hides in this context
+            if tab and tab:IsValid() and tab:IsVisible() then
+                tab:SetVisibility(2) -- Hidden: blocks the hotkey, keeps layout
+                table.insert(hiddenTabs, tab)
+            end
+        end)
+    end
+end
+
+-- Game thread only.
+local function restoreTabHotkeys()
+    for _, tab in ipairs(hiddenTabs) do
+        pcall(function()
+            if tab:IsValid() then
+                tab:SetVisibility(0) -- Visible
+            end
+        end)
+    end
+    hiddenTabs = {}
+end
+
 -- Hooks on /Game/ classes can only be registered once the Blueprint is loaded
 -- (fails with 'no UFunction found' at mod start on a fresh launch - research
 -- doc 3.6b), so registration is deferred to the first successful capture.
@@ -575,6 +485,27 @@ local function registerHooksOnce()
         RegisterHook(XBUTTON_FUNC_PATH, function()
             ExecuteInGameThread(function() refreshAllLists(false) end)
         end)
+
+        -- typing session boundary: focus enters the search box -> hide the
+        -- menu's tab buttons (blocks the M-to-map hotkey); focus leaves ->
+        -- restore. Fires on click-in, so suppression is in place before the
+        -- first keystroke. Own pcall: these are inherited-override functions
+        -- (not bound events); if they fail to register the core search hooks
+        -- must survive, and the outer pcall must not retry-and-double-register
+        -- them on the next list construction.
+        local okFocus, focusErr = pcall(function()
+            RegisterHook(FOCUS_ADDED_FUNC_PATH, function()
+                ExecuteInGameThread(suppressTabHotkeys)
+            end)
+            RegisterHook(FOCUS_REMOVED_FUNC_PATH, function()
+                ExecuteInGameThread(restoreTabHotkeys)
+            end)
+        end)
+        if not okFocus then
+            print("[EquipmentSearch] focus-hook registration failed (M-to-map "
+                .. "hotkey NOT suppressed while typing): "
+                .. tostring(focusErr) .. "\n")
+        end
 
         -- re-apply after the game's own grid passes (tab switch, equip,
         -- pickup, popup reopen). Build repopulates cards asynchronously, so
@@ -608,7 +539,8 @@ local function registerHooksOnce()
 
     if ok then
         hooksRegistered = true
-        print("[EquipmentSearch] hooks registered (TextChanged, X button, Update/Build passes).\n")
+        print("[EquipmentSearch] hooks registered (TextChanged, X button, "
+            .. "focus in/out, Update/Build passes).\n")
     else
         print("[EquipmentSearch] hook registration FAILED: " .. tostring(err) .. "\n")
     end
