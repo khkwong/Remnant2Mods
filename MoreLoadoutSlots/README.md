@@ -1,0 +1,39 @@
+# MoreLoadoutSlots
+
+Raises the Character screen's loadout count from **8 to 20**.
+
+## What it does
+
+- Adds 12 extra loadout tiles to the Loadouts panel, reachable by mouse-wheel
+  scrolling in a slim in-panel scrollbar.
+- Every extra slot behaves exactly like a vanilla slot: right-click to save,
+  left-click or Space to equip, F to delete — same confirmation dialogs, same
+  rules (can't overwrite the currently-equipped loadout, can't load/delete an
+  empty one).
+- Gear saved in the extra slots is stored in your regular save file and
+  survives relaunches.
+
+## Requirements
+
+- Remnant 2 (Steam/PC)
+- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) — experimental-latest build
+
+## Installation
+
+1. Copy the `MoreLoadoutSlots` folder into `<Remnant2>\Binaries\Win64\ue4ss\Mods\`.
+2. Add a line for it in `ue4ss\Mods\mods.txt`:
+   ```
+   MoreLoadoutSlots : 1
+   ```
+3. Launch the game.
+
+## Known limitations
+
+- Scrolling to slots 9+ is mouse-wheel only; gamepad focus-scroll is untested.
+- Saving/equipping into an extra slot while in another player's co-op session
+  is untested (should work, following the same rules as vanilla slots, but
+  hasn't been verified).
+
+## License
+
+MIT — see the repository [LICENSE](../LICENSE).

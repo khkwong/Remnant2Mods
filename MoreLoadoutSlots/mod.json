@@ -1,0 +1,9 @@
+{
+  "ModName": "MoreLoadoutSlots",
+  "ModVersion": "1.0.0",
+  "ModAuthor": "livingpillow",
+  "ModDescription": "Raises the Character screen's loadout count from 8 to 20, with a scrollable panel and full vanilla save/load/equip/delete behavior on every extra slot.",
+  "License": "MIT",
+  "Requires": "UE4SS (experimental-latest build)",
+  "Game": "Remnant 2 (Steam/PC)"
+}
