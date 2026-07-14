@@ -29,9 +29,9 @@ foreach ($dir in @("CustomGameConfigs","MemberVarLayoutTemplates","UE4SS-config"
 }
 
 Write-Host "3. Re-symlinking the three mods against the restored old layout (Mods directly under Win64)..."
-& powershell -ExecutionPolicy Bypass -File "c:\Users\chubb\Projects\Remnant2Mods\scripts\New-ModSymlink.ps1" -ModName MoreLoadoutSlots -GameWin64Path $base -Force
-& powershell -ExecutionPolicy Bypass -File "c:\Users\chubb\Projects\Remnant2Mods\scripts\New-ModSymlink.ps1" -ModName LoadoutNamer -GameWin64Path $base
-& powershell -ExecutionPolicy Bypass -File "c:\Users\chubb\Projects\Remnant2Mods\scripts\New-ModSymlink.ps1" -ModName EquipmentSearch -GameWin64Path $base
+& powershell -ExecutionPolicy Bypass -File "$PSScriptRoot\New-ModSymlink.ps1" -ModName MoreLoadoutSlots -GameWin64Path $base -Force
+& powershell -ExecutionPolicy Bypass -File "$PSScriptRoot\New-ModSymlink.ps1" -ModName LoadoutNamer -GameWin64Path $base
+& powershell -ExecutionPolicy Bypass -File "$PSScriptRoot\New-ModSymlink.ps1" -ModName EquipmentSearch -GameWin64Path $base
 
 Write-Host "4. Current mods.txt:"
 Get-Content "$base\Mods\mods.txt"
