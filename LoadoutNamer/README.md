@@ -14,6 +14,9 @@ Custom names for your loadout slots on the Character screen.
   own "F2 Rename" reminder.
 - Names are saved to a text file next to the mod and persist across game
   sessions.
+- The rename key is configurable: edit `RenameKey=` in `settings.txt` (created
+  next to the mod on first run) to any UE4SS key name (e.g. `F3`, `R`) if you'd
+  rather not use F2.
 
 Pairs well with **MoreLoadoutSlots** (20 slots instead of 8) but works fine
 on its own with the vanilla 8-slot panel.

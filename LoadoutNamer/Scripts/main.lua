@@ -1,12 +1,12 @@
 print("[LoadoutNamer] Loaded and running.\n")
 
 -- Mod #2: custom names for loadout slots.
---   Hover a loadout tile and press F2 -> a text box opens in the tile's title row.
---   Type the new name, then Enter or F2 commits; Escape cancels. Names persist in
---   loadout_names.txt next to this mod (one "recordIndex<TAB>name" line per slot) and
---   are re-applied every time the Loadouts panel is constructed. The hover tooltip's
---   title also shows the (full, untruncated) name; long names show truncated on the
---   tile itself.
+--   Hover a loadout tile and press the rename key (F2 by default, configurable via
+--   settings.txt) -> a text box opens in the tile's title row. Type the new name, then
+--   Enter or the rename key commits; Escape cancels. Names persist in loadout_names.txt
+--   next to this mod (one "recordIndex<TAB>name" line per slot) and are re-applied
+--   every time the Loadouts panel is constructed. The hover tooltip's title also shows
+--   the (full, untruncated) name; long names show truncated on the tile itself.
 --
 -- Everything here composes building blocks proven in ZZTestMod probe rounds 1-2
 -- (research doc 3.4y/3.4z): LabelOverride FText writes survive the game's own
@@ -119,6 +119,65 @@ local function saveNames()
 end
 
 loadNames()
+
+-- ============================== settings ==============================
+
+-- Same io-path uncertainty as the names file (game exe dir differs by UE4SS layout).
+local SETTINGS_FILE_CANDIDATES = {
+  "ue4ss/Mods/LoadoutNamer/settings.txt",
+  "Mods/LoadoutNamer/settings.txt",
+}
+
+local DEFAULT_RENAME_KEY_NAME = "F2"
+local renameKeyName = DEFAULT_RENAME_KEY_NAME
+local renameKey = Key.F2
+
+-- Writes a fresh settings.txt with the default so the option is discoverable without
+-- reading the README - same reasoning as loadNames() creating an empty names file.
+local function writeDefaultSettings()
+  for _, path in ipairs(SETTINGS_FILE_CANDIDATES) do
+    local f = io.open(path, "w")
+    if f then
+      f:write("# LoadoutNamer settings\n")
+      f:write("# RenameKey: the key that opens/commits the rename box while hovering a loadout tile.\n")
+      f:write("# Must match a UE4SS Key enum name (e.g. F1-F12, letters, digits) - see docs.ue4ss.com.\n")
+      f:write(string.format("RenameKey=%s\n", DEFAULT_RENAME_KEY_NAME))
+      f:close()
+      return
+    end
+  end
+end
+
+local function loadSettings()
+  local found = false
+  for _, path in ipairs(SETTINGS_FILE_CANDIDATES) do
+    local f = io.open(path, "r")
+    if f then
+      found = true
+      for line in f:lines() do
+        local k, v = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
+        if k and v and v ~= "" and k:lower() == "renamekey" then
+          local candidate = Key[v:upper()]
+          if candidate then
+            renameKeyName = v:upper()
+            renameKey = candidate
+          else
+            print(string.format("[LoadoutNamer] settings.txt: '%s' isn't a recognized key name - keeping default %s.\n", v, DEFAULT_RENAME_KEY_NAME))
+          end
+        end
+      end
+      f:close()
+      break
+    end
+  end
+  if not found then
+    writeDefaultSettings()
+  end
+  print(string.format("[LoadoutNamer] Rename key: %s%s.\n", renameKeyName,
+    renameKeyName == DEFAULT_RENAME_KEY_NAME and "" or " (from settings.txt)"))
+end
+
+loadSettings()
 
 -- ============================== labels ==============================
 
@@ -335,12 +394,12 @@ local function ensureRenamePrompt(tooltip, recordIndex)
 
       entry = { icon = keyIcon, label = label }
       promptsByExtra[extraName] = entry
-      print("[LoadoutNamer] 'F2 Rename' prompt added to the loadout tooltip's action row.\n")
+      print(string.format("[LoadoutNamer] '%s Rename' prompt added to the loadout tooltip's action row.\n", renameKeyName))
     end
 
     -- Re-assert the texts every tick: the KeyIcon's own Construct may derive KeyText
     -- from its (unset) InputActionName after we first write it, and SetText is cheap.
-    pcall(function() entry.icon.KeyText:SetText(FText("F2")) end)
+    pcall(function() entry.icon.KeyText:SetText(FText(renameKeyName)) end)
     pcall(function() entry.label:SetText(FText("Rename")) end)
 
     -- The reserved Last Gear State record can't be renamed - hide the prompt there.
@@ -605,7 +664,7 @@ local function registerHoverHook()
   end)
   if ok then
     hoverHookRegistered = true
-    print("[LoadoutNamer] Hover tracking registered - hover a loadout tile and press F2 to rename it.\n")
+    print(string.format("[LoadoutNamer] Hover tracking registered - hover a loadout tile and press %s to rename it.\n", renameKeyName))
   else
     print("[LoadoutNamer] FAILED to register hover tracking (renaming unavailable): " .. tostring(err) .. "\n")
   end
@@ -649,7 +708,7 @@ local function beginRename(tile, recordIndex)
       suppressTabHotkeys()
     end)
     if ok then
-      print(string.format("[LoadoutNamer] Renaming slot (record %d) - click the box, type the new name, then Enter/F2 to commit or Escape to cancel. Committing an empty name removes the custom name.\n", recordIndex))
+      print(string.format("[LoadoutNamer] Renaming slot (record %d) - click the box, type the new name, then Enter/%s to commit or Escape to cancel. Committing an empty name removes the custom name.\n", recordIndex, renameKeyName))
     else
       print("[LoadoutNamer] FAILED to open the rename box: " .. tostring(err) .. "\n")
     end
@@ -728,7 +787,7 @@ end
 
 -- ============================== keybinds ==============================
 
-RegisterKeyBind(Key.F2, function()
+RegisterKeyBind(renameKey, function()
   if editSessionActive() then
     endRename(true)
     return
@@ -745,11 +804,11 @@ RegisterKeyBind(Key.F2, function()
 
   local idxOk, idx = pcall(function() return hoveredTile.Index end)
   if not idxOk or type(idx) ~= "number" then
-    print("[LoadoutNamer] F2: could not read the hovered tile's record index - ignoring.\n")
+    print(string.format("[LoadoutNamer] %s: could not read the hovered tile's record index - ignoring.\n", renameKeyName))
     return
   end
   if idx == RESERVED_RECORD_INDEX then
-    print("[LoadoutNamer] F2: that's the game's Last Gear State auto-save slot - it can't be renamed.\n")
+    print(string.format("[LoadoutNamer] %s: that's the game's Last Gear State auto-save slot - it can't be renamed.\n", renameKeyName))
     return
   end
 
