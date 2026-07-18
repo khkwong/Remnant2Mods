@@ -26,7 +26,7 @@ Status: **feature-complete and user-confirmed** as of 2026-07-14. Source: `Equip
 
 ### Keys while typing
 
-- **T / I / M** (Traits/Inventory/Map tab hotkeys) are **suppressed while the box has keyboard focus** — their tab labels fade to show suppression is active, and both labels and hotkeys return the moment focus leaves the box (click elsewhere). Without this, typing any `m` yanked the menu to the map.
+- **T / I / M** (Traits/Inventory/Map tab hotkeys) are **suppressed while the box has keyboard focus** — their tab labels fade to show suppression is active, and both labels and hotkeys return the moment focus leaves the box (click elsewhere). Without this, typing any `m` yanked the menu to the map. The live `Widget_InGameMenu_C` instance is found via `IsVisible()`-filtered `FindAllOf` (fixed 2026-07-17 — this mod copied LoadoutNamer's original "whichever non-`Default__` instance came last" version, which had the same intermittent failure to suppress; see `docs/loadout_namer.md` Warts for the root-cause writeup, identical fix ported here).
 - Other menu letter hotkeys (U/J/O/P/B) are **not** suppressed; in testing they haven't interfered while the box is focused. If one ever does, the fix is one entry in `TAB_HOTKEY_PROPS`.
 
 ### Debug commands (type into the search box)

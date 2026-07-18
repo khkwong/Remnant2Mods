@@ -532,27 +532,38 @@ local function suppressTabHotkeys()
     print("[LoadoutNamer] WARNING: could not find a visible Widget_InGameMenu_C - T/I/M tab hotkeys will NOT be suppressed for this edit.\n")
     return
   end
+  local suppressed = 0
   for _, prop in ipairs(TAB_HOTKEY_PROPS) do
-    pcall(function()
+    local ok, err = pcall(function()
       local tab = menu[prop]
       -- Only touch tabs the game is currently showing, so restore can't force-show
       -- a tab the game itself hides in this context.
       if tab and tab:IsValid() and tab:IsVisible() then
         tab:SetVisibility(2) -- Hidden: blocks the hotkey, keeps layout space
         table.insert(hiddenTabs, tab)
+        suppressed = suppressed + 1
       end
     end)
+    if not ok then
+      print(string.format("[LoadoutNamer] WARNING: failed to suppress the %s tab hotkey: %s\n", prop, tostring(err)))
+    end
+  end
+  if suppressed < #TAB_HOTKEY_PROPS then
+    print(string.format("[LoadoutNamer] Tab hotkey suppression: %d/%d tabs hidden (the rest were already not visible in this context, or failed - see above).\n", suppressed, #TAB_HOTKEY_PROPS))
   end
 end
 
 -- Game thread only.
 local function restoreTabHotkeys()
   for _, tab in ipairs(hiddenTabs) do
-    pcall(function()
+    local ok, err = pcall(function()
       if tab:IsValid() then
         tab:SetVisibility(0) -- Visible
       end
     end)
+    if not ok then
+      print("[LoadoutNamer] WARNING: failed to restore a tab's visibility after a rename: " .. tostring(err) .. "\n")
+    end
   end
   hiddenTabs = {}
 end
@@ -743,7 +754,10 @@ local function beginRename(tile, recordIndex)
       -- mandatory, a raw write doesn't invalidate Slate layout (H4 - the raw write
       -- indeed changed nothing, 2026-07-13 test).
       writeLabel(tile, " ")
-      pcall(function() tile.Label:SetMinDesiredWidth(0.0) end)
+      local widthOk, widthErr = pcall(function() tile.Label:SetMinDesiredWidth(0.0) end)
+      if not widthOk then
+        print("[LoadoutNamer] WARNING: failed to release the tile label's reserved width - the edit box may render squeezed: " .. tostring(widthErr) .. "\n")
+      end
       row:AddChild(box)
 
       editBox = box
@@ -769,14 +783,20 @@ local function endRename(commit)
     restoreTabHotkeys()
 
     local text = ""
-    pcall(function() text = box.Text:ToString() end)
+    local textOk, textErr = pcall(function() text = box.Text:ToString() end)
+    if commit and not textOk then
+      print("[LoadoutNamer] WARNING: could not read the edit box's text on commit - treating as empty (name will be removed): " .. tostring(textErr) .. "\n")
+    end
 
-    pcall(function()
+    local removeOk, removeErr = pcall(function()
       local parent = box:GetParent()
       if parent and parent:IsValid() then
         parent:RemoveChild(box)
       end
     end)
+    if not removeOk then
+      print("[LoadoutNamer] WARNING: failed to remove the edit box from the tile - it may linger visually: " .. tostring(removeErr) .. "\n")
+    end
 
     if not tile or not tile:IsValid() then
       return -- screen closed mid-edit; the next apply pass restores labels anyway
@@ -784,7 +804,10 @@ local function endRename(commit)
 
     -- Give the label its reserved title-row width back (zeroed for the edit).
     -- Real setter, not a raw write - layout property (H4).
-    pcall(function() tile.Label:SetMinDesiredWidth(130.0) end)
+    local widthOk, widthErr = pcall(function() tile.Label:SetMinDesiredWidth(130.0) end)
+    if not widthOk then
+      print("[LoadoutNamer] WARNING: failed to restore the tile label's width after a rename - the title row may look squeezed: " .. tostring(widthErr) .. "\n")
+    end
 
     if not commit then
       applyRestingLabel(tile, idx)

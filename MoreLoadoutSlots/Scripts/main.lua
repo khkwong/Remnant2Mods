@@ -16,9 +16,11 @@ RegisterHook("/Script/Engine.PlayerController:ClientRestart", function(self, New
   ExecuteInGameThread(function()
     local components = FindAllOf("LoadoutComponent")
     if not components then
+      print("[MoreLoadoutSlots] WARNING: FindAllOf(\"LoadoutComponent\") returned nothing - NumRecords not patched, extra loadout slots will error when used.\n")
       return
     end
 
+    local componentsPatched, slotsPatched, slotsAttempted = 0, 0, 0
     for i, comp in ipairs(components) do
       if comp:IsValid() then
         local ok, slots = pcall(function() return comp.Slots end)
@@ -26,11 +28,24 @@ RegisterHook("/Script/Engine.PlayerController:ClientRestart", function(self, New
           -- +1 because record 10 is the game's reserved "last gear state" auto-save - the
           -- visible tiles skip it, so the highest player-facing record index is
           -- TOTAL_LOADOUT_SLOTS (not TOTAL_LOADOUT_SLOTS - 1).
+          local anyOk = false
           for j = 1, #slots do
-            pcall(function() slots[j].NumRecords = TOTAL_LOADOUT_SLOTS + 1 end)
+            slotsAttempted = slotsAttempted + 1
+            local writeOk = pcall(function() slots[j].NumRecords = TOTAL_LOADOUT_SLOTS + 1 end)
+            if writeOk then
+              slotsPatched = slotsPatched + 1
+              anyOk = true
+            end
+          end
+          if anyOk then
+            componentsPatched = componentsPatched + 1
           end
         end
       end
+    end
+    if slotsPatched < slotsAttempted then
+      print(string.format("[MoreLoadoutSlots] WARNING: only patched %d/%d slot(s) across %d/%d LoadoutComponent(s) - some loadout records may still cap at the vanilla limit.\n",
+        slotsPatched, slotsAttempted, componentsPatched, #components))
     end
   end)
 end)

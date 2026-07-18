@@ -443,41 +443,78 @@ end
 local TAB_HOTKEY_PROPS = { "TraitTab", "InventoryTab", "MapTab" }
 local hiddenTabs = {}
 
--- Game thread only.
-local function suppressTabHotkeys()
-    local menu = nil
+-- Disambiguate multiple live Widget_InGameMenu_C instances by IsVisible() (only the
+-- on-screen one should be true) rather than "whichever non-Default__ instance
+-- FindAllOf returned last" - the latter caused an intermittent, hard-to-reproduce
+-- failure to suppress in LoadoutNamer (same copied technique - fixed there 2026-07-17,
+-- root-caused via a logged instance count/visibility breakdown after a GetParent()-walk
+-- alternative was tried and found structurally wrong: GetParent() only walks nesting
+-- WITHIN one UserWidget's own tree, it can't cross into the tree that embeds it).
+local function findOwningMenu()
+    local visible = {}
+    local totalNonDefault = 0
     pcall(function()
         local all = FindAllOf("Widget_InGameMenu_C")
         if all then
             for _, m in ipairs(all) do
                 if m:IsValid() and not m:GetFullName():find("Default__") then
-                    menu = m
+                    totalNonDefault = totalNonDefault + 1
+                    local visOk, vis = pcall(function() return m:IsVisible() end)
+                    if visOk and vis then
+                        visible[#visible + 1] = m
+                    end
                 end
             end
         end
     end)
-    if not menu then return end
+    if #visible == 1 then
+        return visible[1]
+    end
+    print(string.format("[EquipmentSearch] findOwningMenu: %d non-default Widget_InGameMenu_C instance(s), %d visible - %s.\n",
+        totalNonDefault, #visible,
+        #visible == 0 and "none usable" or "using the last visible one"))
+    return visible[#visible] -- nil if #visible == 0
+end
+
+-- Game thread only.
+local function suppressTabHotkeys()
+    local menu = findOwningMenu()
+    if not menu then
+        print("[EquipmentSearch] WARNING: could not find a visible Widget_InGameMenu_C - T/I/M tab hotkeys will NOT be suppressed while typing.\n")
+        return
+    end
+    local suppressed = 0
     for _, prop in ipairs(TAB_HOTKEY_PROPS) do
-        pcall(function()
+        local ok, err = pcall(function()
             local tab = menu[prop]
             -- only touch tabs the game is currently showing, so restore can't
             -- force-show a tab the game itself hides in this context
             if tab and tab:IsValid() and tab:IsVisible() then
                 tab:SetVisibility(2) -- Hidden: blocks the hotkey, keeps layout
                 table.insert(hiddenTabs, tab)
+                suppressed = suppressed + 1
             end
         end)
+        if not ok then
+            print(string.format("[EquipmentSearch] WARNING: failed to suppress the %s tab hotkey: %s\n", prop, tostring(err)))
+        end
+    end
+    if suppressed < #TAB_HOTKEY_PROPS then
+        print(string.format("[EquipmentSearch] Tab hotkey suppression: %d/%d tabs hidden (the rest were already not visible in this context, or failed - see above).\n", suppressed, #TAB_HOTKEY_PROPS))
     end
 end
 
 -- Game thread only.
 local function restoreTabHotkeys()
     for _, tab in ipairs(hiddenTabs) do
-        pcall(function()
+        local ok, err = pcall(function()
             if tab:IsValid() then
                 tab:SetVisibility(0) -- Visible
             end
         end)
+        if not ok then
+            print("[EquipmentSearch] WARNING: failed to restore a tab's visibility after search box focus was lost: " .. tostring(err) .. "\n")
+        end
     end
     hiddenTabs = {}
 end
