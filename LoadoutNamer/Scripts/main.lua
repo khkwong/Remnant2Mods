@@ -486,20 +486,50 @@ end
 local TAB_HOTKEY_PROPS = { "TraitTab", "InventoryTab", "MapTab" }
 local hiddenTabs = {}
 
--- Game thread only.
-local function suppressTabHotkeys()
-  local menu = nil
+-- GetParent() only walks nesting WITHIN one UserWidget's own internal tree - tried
+-- walking up from the tile (2026-07-17) to find the owning Widget_InGameMenu_C
+-- directly, but it dead-ends at the CanvasPanel root of Widget_LoadoutsPanel_C's own
+-- tree every time (confirmed via logged chain: Widget_Loadout_C -> VerticalBox ->
+-- ScrollBox -> SizeBox -> VerticalBox -> RemnantCursorPanel -> Overlay -> CanvasPanel
+-- -> invalid). Crossing from a nested UserWidget into the tree that embeds it isn't a
+-- parent-slot relationship, so there's no further GetParent() hop to take - abandoned.
+--
+-- Back to a global FindAllOf, but disambiguating candidates by IsVisible() (only the
+-- on-screen instance should be visible; the "last non-Default__ found" heuristic this
+-- replaced could land on a stale instance depending on FindAllOf's iteration order -
+-- the likely cause of the original intermittent failure). IsVisible() is already the
+-- confirmed-working signal this file gates the tabs themselves on (3.4aa).
+local function findOwningMenu()
+  local visible = {}
+  local totalNonDefault = 0
   pcall(function()
     local all = FindAllOf("Widget_InGameMenu_C")
     if all then
       for _, m in ipairs(all) do
         if m:IsValid() and not m:GetFullName():find("Default__") then
-          menu = m
+          totalNonDefault = totalNonDefault + 1
+          local visOk, vis = pcall(function() return m:IsVisible() end)
+          if visOk and vis then
+            table.insert(visible, m)
+          end
         end
       end
     end
   end)
+  if #visible == 1 then
+    return visible[1]
+  end
+  print(string.format("[LoadoutNamer] findOwningMenu: %d non-default Widget_InGameMenu_C instance(s), %d visible - %s.\n",
+    totalNonDefault, #visible,
+    #visible == 0 and "none usable" or "using the last visible one"))
+  return visible[#visible] -- nil if #visible == 0
+end
+
+-- Game thread only.
+local function suppressTabHotkeys()
+  local menu = findOwningMenu()
   if not menu then
+    print("[LoadoutNamer] WARNING: could not find a visible Widget_InGameMenu_C - T/I/M tab hotkeys will NOT be suppressed for this edit.\n")
     return
   end
   for _, prop in ipairs(TAB_HOTKEY_PROPS) do
