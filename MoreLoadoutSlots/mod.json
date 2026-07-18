@@ -1,6 +1,6 @@
 {
   "ModName": "MoreLoadoutSlots",
-  "ModVersion": "1.0.0",
+  "ModVersion": "1.1.1",
   "ModAuthor": "livingpillow",
   "ModDescription": "Raises the Character screen's loadout count from 8 to 20, with a scrollable panel and full vanilla save/load/equip/delete behavior on every extra slot.",
   "License": "MIT",

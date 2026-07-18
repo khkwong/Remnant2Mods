@@ -80,8 +80,13 @@ if ($existingVersions.Count -eq 0) {
 }
 
 if ($Version) {
-    if ($validNext.Values -notcontains $Version) {
-        throw "'$Version' is not a single-step increment from the latest dist version ($(if ($latest) { $latest } else { '(none yet)' })). Valid next versions right now: $($validNext.patch) (patch), $($validNext.minor) (minor), $($validNext.major) (major)."
+    # Also allow targeting the CURRENT latest version (not just one step past it) - a
+    # multi-mod release packages several mods at the same version number in separate
+    # runs, and by the second mod, the first mod's run has already made that version
+    # "latest". Still requires this mod to not already have a zip there (or -Force).
+    $isCurrentLatest = $latest -and ($Version -eq $latest.ToString())
+    if (($validNext.Values -notcontains $Version) -and -not $isCurrentLatest) {
+        throw "'$Version' is neither the current latest dist version ($(if ($latest) { $latest } else { '(none yet)' })) nor a single-step increment from it. Valid targets right now: $($latest) (same release), $($validNext.patch) (patch), $($validNext.minor) (minor), $($validNext.major) (major)."
     }
     $targetVersion = $Version
 } else {
