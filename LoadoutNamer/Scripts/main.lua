@@ -221,9 +221,47 @@ end
 
 -- ============================== apply pass ==============================
 
+-- Game thread only. Writes saved names onto tiles 0..count-1. Only ever touches tiles
+-- that HAVE a saved name (the `names[idx]` guard below) - it never writes a tile's
+-- default label, so it can never race MoreLoadoutSlots' own default-label pass no
+-- matter which order the two mods' hooks run in. That's what makes calling this
+-- repeatedly, on whatever tile count exists at the time, safe and idempotent.
+local function applyNamesToCount(panel, count)
+  local applied = 0
+  for i = 0, count - 1 do
+    local ok = pcall(function()
+      local tile = panel.LoadoutList:GetChildAt(i)
+      local idx = tile.Index
+      if names[idx] then
+        if writeLabel(tile, tileTextFor(names[idx])) then
+          applied = applied + 1
+        end
+      end
+    end)
+    if not ok then
+      print(string.format("[LoadoutNamer] Could not read tile %d during the apply-names pass - skipping it.\n", i))
+    end
+  end
+  if applied > 0 then
+    print(string.format("[LoadoutNamer] Applied %d saved names to the Loadouts panel.\n", applied))
+  end
+end
+
+-- MoreLoadoutSlots injects its extra tiles synchronously - one panel-construction poll
+-- cycle takes the tile count straight from 8 to EXPECTED_TILES in a single tick, it
+-- never grows gradually (see MoreLoadoutSlots/Scripts/main.lua addExtraLoadoutTile).
+-- So there's nothing to "wait until it's safe" for: apply on the very first tick to
+-- whatever tile count already exists (instant in the common case, including without
+-- MoreLoadoutSlots), then keep polling only to catch a LATER count change (that mod
+-- present but still mid-injection) and redo the pass when it happens. Previously this
+-- blocked the first apply on reaching EXPECTED_TILES, which without MoreLoadoutSlots
+-- (vanilla 8-tile panel, count never reaches it) burned the full ~4s timeout on every
+-- panel construction before applying anything - the couple-second delay reported
+-- 2026-07-17.
 local function applySavedNames(panel)
   local attempts = 0
-  local MAX_ATTEMPTS = 80 -- ~4s; also filters the two benign no-LoadoutList panel instances
+  local MAX_ATTEMPTS = 80 -- ~4s safety cap on how long to keep watching for a late count change
+  local lastAppliedCount = -1
 
   LoopAsync(50, function()
     attempts = attempts + 1
@@ -231,38 +269,16 @@ local function applySavedNames(panel)
     local countOk, count = pcall(function() return panel.LoadoutList:GetChildrenCount() end)
     local haveList = countOk and count and count > 0
 
-    if not haveList or count < EXPECTED_TILES then
-      if attempts < MAX_ATTEMPTS then
-        return false
-      end
-      if not haveList then
-        return true -- benign non-UI panel instance; nothing to do
-      end
-      -- Fewer tiles than expected (MoreLoadoutSlots disabled?) - apply to what exists.
+    if not haveList then
+      return attempts >= MAX_ATTEMPTS -- benign non-UI panel instance; nothing to do
     end
 
-    ExecuteInGameThread(function()
-      local applied = 0
-      for i = 0, count - 1 do
-        local ok = pcall(function()
-          local tile = panel.LoadoutList:GetChildAt(i)
-          local idx = tile.Index
-          if names[idx] then
-            if writeLabel(tile, tileTextFor(names[idx])) then
-              applied = applied + 1
-            end
-          end
-        end)
-        if not ok then
-          print(string.format("[LoadoutNamer] Could not read tile %d during the apply-names pass - skipping it.\n", i))
-        end
-      end
-      if applied > 0 then
-        print(string.format("[LoadoutNamer] Applied %d saved names to the Loadouts panel.\n", applied))
-      end
-    end)
+    if count ~= lastAppliedCount then
+      lastAppliedCount = count
+      ExecuteInGameThread(function() applyNamesToCount(panel, count) end)
+    end
 
-    return true
+    return count >= EXPECTED_TILES or attempts >= MAX_ATTEMPTS
   end)
 end
 
