@@ -1,6 +1,6 @@
 {
   "ModName": "LoadoutNamer",
-  "ModVersion": "1.1.1",
+  "ModVersion": "1.1.2",
   "ModAuthor": "livingpillow",
   "ModDescription": "Custom names for loadout slots on the Character screen. Hover a tile and press F2 to rename it; names persist across sessions.",
   "License": "MIT",
