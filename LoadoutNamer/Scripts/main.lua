@@ -457,6 +457,13 @@ local function scheduleTooltipTitle(recordIndex)
           -- title into every future tooltip instance.
           if tt:IsValid() and not tt:GetFullName():find("Default__") then
             ExecuteInGameThread(function()
+              -- The hover may have moved on between this callback being queued and the
+              -- game thread actually running it - re-check so a stale generation doesn't
+              -- still do work (and doesn't add to how many of these can be in flight at
+              -- once when the mouse sweeps quickly across several tiles).
+              if gen ~= tooltipGen then
+                return
+              end
               pcall(function() tt.ItemLabel:SetText(FText(title)) end)
               ensureRenamePrompt(tt, recordIndex)
             end)
