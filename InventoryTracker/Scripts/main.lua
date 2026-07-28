@@ -86,6 +86,63 @@ local function readOwnedClassPaths(inv)
     return owned
 end
 
+local function findTraitsComponent(pawn)
+    local all = FindAllOf("TraitsComponent")
+    if not all then return nil end
+    for _, c in ipairs(all) do
+        local ok, owner = pcall(function() return c:GetOuter() end)
+        if ok and owner then
+            local okSame, same = pcall(function() return owner:GetFullName() == pawn:GetFullName() end)
+            if okSame and same then return c end
+        end
+    end
+    return nil
+end
+
+-- Traits work differently from every other category: ownership isn't an
+-- inventory scan, it's presence in TraitsComponent.Traits (a plain
+-- TArray<FTraitInfo> property - Level is the player's allocated points,
+-- 0-10). Confirmed via a live ZZTestMod probe (research doc 3.16) that an
+-- unlockable trait the player hasn't found yet is simply ABSENT from this
+-- array, not present at Level=0 - so presence alone means "found," and
+-- Level tells you how many points are in it. Archetype/Core traits also
+-- live in this same array but are filtered out of MASTER_LIST entirely at
+-- build time (match_traits.py), so this only ever needs to look up
+-- Unlockable-category entries.
+local function readTraitLevels(comp)
+    local levels = {}
+    local okTraits, traits = pcall(function() return comp.Traits end)
+    if not okTraits or traits == nil then
+        print("[InventoryTracker] readTraitLevels: comp.Traits unreadable.\n")
+        return levels
+    end
+    local okLen, len = pcall(function() return #traits end)
+    if not okLen then
+        print("[InventoryTracker] readTraitLevels: #traits unreadable.\n")
+        return levels
+    end
+    for i = 1, len do
+        local okEntry, entry = pcall(function() return traits[i] end)
+        if okEntry and entry ~= nil then
+            local unwrapped = entry
+            if type(entry) == "userdata" then
+                local okGet, inner = pcall(function() return entry:get() end)
+                if okGet and inner ~= nil then unwrapped = inner end
+            end
+            local okBP, traitBP = pcall(function() return unwrapped.TraitBP end)
+            local okLevel, level = pcall(function() return unwrapped.Level end)
+            if okBP and traitBP ~= nil and okLevel then
+                local okPath, path = pcall(function() return traitBP:GetFullName() end)
+                if okPath and path then
+                    local assetPath = string.match(path, "(/Game/.+)$")
+                    if assetPath then levels[string.lower(assetPath)] = level end
+                end
+            end
+        end
+    end
+    return levels
+end
+
 RegisterKeyBind(Key.F8, function()
     print("[InventoryTracker] F8 pressed - checking inventory.\n")
     ExecuteInGameThread(function()
@@ -109,11 +166,30 @@ RegisterKeyBind(Key.F8, function()
         end
 
         local owned = readOwnedClassPaths(inv)
+
+        local traitsComp = findTraitsComponent(pawn)
+        local traitLevels = traitsComp and readTraitLevels(traitsComp) or {}
+        if not traitsComp then
+            print("[InventoryTracker] F8: no TraitsComponent found - traits will show as missing.\n")
+        end
+
         local ownedCount, missingCount = 0, 0
         for _, item in ipairs(MASTER_LIST) do
-            local has = owned[string.lower(item.classPath)] == true
-            if has then ownedCount = ownedCount + 1 else missingCount = missingCount + 1 end
-            print(string.format("[InventoryTracker]   [%s] (%s) %s\n", has and "X" or " ", item.category, item.name))
+            if item.category == "Trait" then
+                local level = traitLevels[string.lower(item.classPath)]
+                if level ~= nil then
+                    ownedCount = ownedCount + 1
+                    print(string.format("[InventoryTracker]   [X] (Trait) %s - %d/10\n", item.name, level))
+                else
+                    missingCount = missingCount + 1
+                    local sourceText = item.source and (" - " .. item.source) or ""
+                    print(string.format("[InventoryTracker]   [ ] (Trait) %s%s\n", item.name, sourceText))
+                end
+            else
+                local has = owned[string.lower(item.classPath)] == true
+                if has then ownedCount = ownedCount + 1 else missingCount = missingCount + 1 end
+                print(string.format("[InventoryTracker]   [%s] (%s) %s\n", has and "X" or " ", item.category, item.name))
+            end
         end
         print(string.format("[InventoryTracker] F8: %d owned, %d missing (of %d total).\n",
             ownedCount, missingCount, #MASTER_LIST))

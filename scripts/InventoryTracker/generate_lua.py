@@ -49,11 +49,20 @@ def main():
         "return {",
     ]
     for e in entries:
-        lines.append(
-            f'    {{ category = "{lua_escape(e["category"])}", '
-            f'name = "{lua_escape(e["name"])}", '
-            f'classPath = "{lua_escape(e["classPath"])}" }},'
-        )
+        fields = [
+            f'category = "{lua_escape(e["category"])}"',
+            f'name = "{lua_escape(e["name"])}"',
+            f'classPath = "{lua_escape(e["classPath"])}"',
+        ]
+        # Any other string-valued key (e.g. traits' "source") rides along
+        # generically - keeps this script reusable without a schema bump
+        # every time a category needs one extra display field.
+        for key, value in e.items():
+            if key in ("category", "name", "classPath"):
+                continue
+            if isinstance(value, str) and value:
+                fields.append(f'{key} = "{lua_escape(value)}"')
+        lines.append("    { " + ", ".join(fields) + " },")
     lines.append("}")
     lines.append("")
 
