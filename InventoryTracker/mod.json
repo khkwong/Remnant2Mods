@@ -1,0 +1,9 @@
+{
+  "ModName": "InventoryTracker",
+  "ModVersion": "0.1.0",
+  "ModAuthor": "livingpillow",
+  "ModDescription": "Shows which unique equippable items (rings, amulets, armor, weapons, weapon mods, archetypes, mutators, traits) the player currently has versus what's missing.",
+  "License": "MIT",
+  "Requires": "UE4SS (experimental-latest or stable v3.0.1 Beta)",
+  "Game": "Remnant 2 (Steam/PC)"
+}

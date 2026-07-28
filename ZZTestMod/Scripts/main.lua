@@ -3,26 +3,32 @@ print("[ZZTestMod] Loaded - idle (no active probes).\n")
 -- Research scratchpad only. Feature code lives in MoreLoadoutSlots/,
 -- LoadoutNamer/, and EquipmentSearch/ (each <Mod>/Scripts/main.lua).
 --
--- IDLE. Last campaign: EquipmentSearch probe rounds P1-P8 (2026-07), all
--- concluded; findings recorded in docs/remnant2-modding-research.md 3.6b.
--- Summary of what they proved:
---   P1 (F2): unhiding Widget_InventorySearchFilter_C + SearchFilterText works;
---       the CanSeeSearchBar gate binding is inert after construction.
---   P4 (F3): card:Get_InspectInfo({}) out-param spreading works; ItemID is a
---       plain readable property on Widget_InventoryItem_C.
---   P5 (F4): HAZARD - UE4SS zero-fills synthesized struct params; ToString()
---       on a zero-filled FText is a native crash pcall cannot catch. Passing a
---       REAL info struct into ModifyInspectInfo doesn't crash but changes
---       nothing -> re-invoking the game's inspect pipeline is a dead end.
---   P6 (F5): HAZARD - ForEachProperty does NOT walk super-structs; InspectStat
---       inherits InspectStatBase (Label, CustomDescription, ...). Walk
---       GetSuperStruct() or field lists are silently incomplete. Also:
---       Widget_ItemTooltip_C:GetInspectInfo hook never fires on hover.
---   P7 (F6): trigger-ring effect text lives in Stats[].CustomDescription
---       (inherited field); stat-ring effect text in Mods[].Label.
---   P8 (F7): reading CustomDescription on Stats entries is safe for all 213
---       rings -> the earlier full-sweep crash was reading a Stats-only field
---       on Mods entries (structs differ per array; per-array field lists fix).
+-- IDLE. Last campaign: Collection Tracker (new mod #4 idea) Phase 0 research
+-- spike (2026-07-27), rounds 1-5, all concluded; findings recorded in
+-- docs/remnant2-modding-research.md 3.10. Summary of what they proved:
+--   - No persistent "ever obtained" flag exists anywhere in native reflection
+--     (grepped the full /Script/Remnant CXX header dump for Discover/Journal/
+--     Codex/Compendium - zero matches). Tracking can only ever reflect
+--     CURRENT inventory contents, same ceiling as EquipmentSearch.
+--   - FindAllOf-sourced live component instances support IsValid/GetFullName/
+--     GetOuter/GetClass/direct named-field indexing, but NOT ForEachProperty/
+--     GetFunction (both error "TrivialObject value"). StaticFindObject-
+--     sourced STRUCT objects (not live components) do support ForEachProperty
+--     (EquipmentSearch's InspectInfo pattern) - a different code path.
+--   - UE4SS's "Dump CXX Headers" dumper (Dumpers tab, F10/Tilde debug GUI)
+--     gives real typed native function signatures - reach for this earlier
+--     next time instead of guessing via trial calls.
+--   - HAZARD (native crash, pcall useless): RemnantPlayerInventoryComponent's
+--     HasItem(TSoftClassPtr<AItem> ItemBP, int32 Quantity, int32 ItemLevel)
+--     crashed the game when called with a raw UClass value for ItemBP.
+--     TSoftClassPtr is a STRUCT (wraps FSoftObjectPath), not a raw pointer
+--     like TSubclassOf - same class of mistake as unwrapped FText (3.4b).
+--     Do not call this (or anything else taking TSoftClassPtr) without first
+--     working out the correct Lua-side soft-pointer construction.
+--   - Superseding approach: RemnantPlayerInventoryComponent.Items (a plain
+--     TArray<FInventoryItem> property) reads directly with zero risk - no
+--     function call needed. Ownership checks should scan this array's
+--     .ItemBP entries instead of calling HasItem.
 --
 -- Older diagnostics (loadout probes, input logger, delegate Add() test, chain
--- tracers) are all recoverable from git history.
+-- tracers, EquipmentSearch P1-P8) are all recoverable from git history.
