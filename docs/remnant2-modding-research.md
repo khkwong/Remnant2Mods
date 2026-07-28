@@ -663,6 +663,19 @@ Returns `{name, filepath, class}` per item, where **`filepath` is already the co
 
 **Standing rule reaffirmed**: this is now the third time the Cargo API has been sampled per-category (Amulet: clean, Weapons: clean, Weapon Mod: NOT clean, twice). Keep spot-checking every new category against known-good data before trusting it — "most categories are clean" is not the same as "assume clean by default."
 
+### 3.15 MOD #4 InventoryTracker — Mutators and Engrams added via the Cargo API, 2026-07-28
+
+`MASTER_LIST` grew from 597 to **677 entries** (+66 Mutators, +14 Engrams). Both new categories went through the API-first checklist (§2 of the handoff brief): sampled the `Mutator` and `Engram` Cargo classes, checked for missing `filepath` values and duplicate names, spot-checked that `filepath` pointed to a plausibly-matching asset for the display name.
+
+**Results:**
+- **Mutator: 66/66, all with a filepath, 0 duplicate names.** Filepaths follow `MetaGem_<InternalName>` and matched their display name in every sampled row (e.g. "Bandit" → `MetaGem_Bandit`). No FModel-built list existed to run `verify_against_api.py` against, so this was accepted on the sample-and-spot-check alone, same bar used for Weapons in §3.13. `match_mutators.py` covers both weapon and armor mutators as one "Mutator" category — the wiki's Cargo table doesn't split them, and neither does the master list.
+- **Engram: 14/14, all with a filepath, 0 duplicate names.** One entry per unlockable archetype (base + all DLC). Filepaths follow `Engram_<ArchetypeInternalName>`, e.g. "Caduceus Idol" (display name) → `Engram_Medic` (Medic is the archetype's internal name) — same display-name-vs-internal-name split already seen in Armor (§3.14), not a data quality problem.
+- Neither class showed the wrong-asset-type substitution pattern confirmed twice for Weapon Mod (§3.13/§3.14) — no reason found to fall back to FModel for either.
+
+Both scripts (`match_mutators.py`, `match_engrams.py`) follow the now-standard single-class API pattern (`match_weapons.py`/`match_rings_amulets.py` shape) — no manual fixes or fallback entries needed for either category. In-game spot-check (F8, owned/missing counts against a known save) confirmed good by the user.
+
+**Standing note**: Engrams unlock an archetype permanently and are a legitimate one-time collectible, same shape as rings/amulets/armor — distinct from traits, which are stat unlocks tied to archetype level-up, not a separate obtainable item, and are out of scope for this mod's item-ownership model.
+
 ### 3.4-old Open sub-questions after this pass (superseded in part by 3.4 above)
 - Is the loadout slot count a property on some default object (easy `SetPropertyValue` patch, per 3.2's pattern) or is it baked into the widget's layout graph (needs the heavier Blueprint/widget-editing route from the Dmgvol guide, section 2)? — **Answer needed from Live View inspection, not guessable from docs.**
 - For the search bar / loadout naming: `NotifyOnNewObject` on the relevant widget class is clearly the right entry point (per 3.1) — but we still need the actual widget class path, which only Live View or the Discord can give us.
