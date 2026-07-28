@@ -56,6 +56,37 @@ def write_json(path: Path, data) -> None:
         f.write("\n")
 
 
+def write_master_list(path: Path, entries: list) -> None:
+    """Write a category's master-list output (dev-data/master_list/<category>
+    .json) - refusing to silently overwrite existing good data with an empty
+    or drastically smaller result. Protects against any data-source failure
+    mode (Cargo API down, network error, missing FModel exports, a bug) that
+    produces zero/few rows without raising its own error - e.g. Path.rglob()
+    on a missing directory returns [] instead of raising (hit for real,
+    research doc 3.14/match_mods.py).
+
+    Not for _unmatched/diagnostic files - those are expected to legitimately
+    be empty or small; use write_json for those.
+    """
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            existing_count = len(existing) if isinstance(existing, list) else 0
+        except (json.JSONDecodeError, OSError):
+            existing_count = 0
+
+        if existing_count > 0 and len(entries) < existing_count:
+            raise SystemExit(
+                f"Refusing to overwrite {path} ({existing_count} existing entries) with only "
+                f"{len(entries)} entries ({len(entries) / existing_count:.0%} of previous). "
+                f"This looks like a failed/partial fetch (API down, network error, missing "
+                f"exports), not a real update. If this drop is actually expected, delete the "
+                f"file by hand first to confirm you mean it."
+            )
+
+    write_json(path, entries)
+
+
 def cargo_query(class_name: str) -> list:
     """Query remnant2.wiki.gg's Cargo/Librarian API for every item of a
     given `class` (e.g. "Ring", "Long Gun", "Helmet"). Returns a list of

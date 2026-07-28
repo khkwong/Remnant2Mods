@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import normalize, find_package, load_name_list, write_json, class_path, is_real_item_file
+from lib import normalize, find_package, load_name_list, write_json, write_master_list, class_path, is_real_item_file
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPORTS = ROOT / "dev-data" / "Exports"
@@ -88,7 +88,7 @@ def main():
         matched.append({"category": "Mod", "name": wiki_name, "classPath": class_path(package)})
 
     matched.sort(key=lambda r: r["name"])
-    write_json(OUT_DIR / "mods.json", matched)
+    write_master_list(OUT_DIR / "mods.json", matched)
     write_json(OUT_DIR / "mods_unmatched.json", unmatched)
 
     print(f"Mods: {len(matched)}/{len(wiki_names)} wiki names matched, {len(unmatched)} exported assets unmatched")

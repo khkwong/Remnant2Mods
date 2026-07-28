@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import write_json, cargo_query
+from lib import write_json, write_master_list, cargo_query
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "dev-data" / "master_list"
@@ -31,7 +31,7 @@ def main():
             matched.append({"category": category, "name": row["name"], "classPath": filepath})
 
     matched.sort(key=lambda r: (r["category"], r["name"]))
-    write_json(OUT_DIR / "rings_amulets.json", matched)
+    write_master_list(OUT_DIR / "rings_amulets.json", matched)
     if no_filepath:
         write_json(OUT_DIR / "rings_amulets_unmatched.json", no_filepath)
     else:
