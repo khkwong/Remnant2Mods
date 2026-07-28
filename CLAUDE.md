@@ -2,7 +2,7 @@
 
 ## What this project is
 
-UE4SS Lua mods for Remnant 2 (Steam/PC, Unreal Engine 5.2). Three mods **shipped** (as of 2026-07-14): `MoreLoadoutSlots` (20 slots), `LoadoutNamer` (F2-rename loadout tiles), `EquipmentSearch` (inventory search bar). A fourth, `InventoryTracker` (owned/missing checklist for unique equippable items), is **in progress** as of 2026-07-27 — Phase 1 (rings/amulets, log-only output) is done and proven; no in-game UI yet. Each mod has a `*_DONE.md` or `*_START.md` brief in `dev-docs/` (read that first for any work on that mod) and a reference doc in `docs/`. Session docs live in `dev-docs/`, research in `docs/` — they are the source of truth, not this file.
+UE4SS Lua mods for Remnant 2 (Steam/PC, Unreal Engine 5.2). Three mods **shipped** (as of 2026-07-14): `MoreLoadoutSlots` (20 slots), `LoadoutNamer` (F2-rename loadout tiles), `EquipmentSearch` (inventory search bar). A fourth, `InventoryTracker` (owned/missing checklist for unique equippable items), is **in progress** as of 2026-07-27 — Phase 1 (rings/amulets) and Phase 2 (armor/weapon mods) are done, 484 items tracked, log-only output; no in-game UI yet. Each mod has a `*_DONE.md` or `*_START.md` brief in `dev-docs/` (read that first for any work on that mod) and a reference doc in `docs/`. Session docs live in `dev-docs/`, research in `docs/` — they are the source of truth, not this file.
 
 ## Project owner
 

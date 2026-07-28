@@ -3,3 +3,5 @@ dev-docs/
 LoadoutNamer/loadout_names.txt
 LoadoutNamer/settings.txt
 dist/
+__pycache__/
+*.pyc
