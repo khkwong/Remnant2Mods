@@ -6,6 +6,20 @@ into specific Special/Archetype weapons and aren't separately owned/
 swappable (owning one just means owning that weapon). Rebuilds
 dev-data/master_list/mods.json from a fresh scan of dev-data/Exports/. See
 research doc 3.12 for full history.
+
+*** NEEDS A FRESH FModel EXPORT TO RUN, AS OF 2026-07-28 ***
+dev-data/Exports/ was deleted (research doc 3.14) once rings/amulets/armor/
+weapons were confirmed to work from the Cargo API instead - this is the one
+remaining category still on the FModel-export approach, because the API's
+Weapon Mod class has confirmed bad data (some filepaths point to unrelated
+crafting materials instead of the mod itself - the API isn't usable here,
+confirmed twice via scripts/InventoryTracker/verify_against_api.py).
+Path.rglob() on a missing directory returns an empty list
+instead of raising, so this would otherwise silently write an EMPTY
+mods.json and drop all 36 mods from MASTER_LIST with no error - the guard in
+main() below turns that into a loud failure instead. Before running this:
+re-export Items/Mods/ (all World_* folders, check both pakchunks - see the
+pakchunk hazard in research doc 3.11/3.12) into dev-data/Exports/.
 """
 import re
 import sys
@@ -40,6 +54,15 @@ def is_standalone(path: Path) -> bool:
 
 
 def main():
+    if not EXPORTS.is_dir():
+        raise SystemExit(
+            f"{EXPORTS} does not exist - it was deleted 2026-07-28 (research doc 3.14). "
+            f"This script needs a fresh FModel export of Items/Mods/ (all World_* folders, "
+            f"check both pakchunks) before it can run. Without this guard, Path.rglob() on a "
+            f"missing directory silently returns zero results, which would have written an "
+            f"EMPTY mods.json and dropped all mods from MASTER_LIST with no error."
+        )
+
     wiki_names = load_name_list(WIKI_DIR / "mod_names.txt")
     wiki_by_norm = {normalize(n): n for n in wiki_names}
 

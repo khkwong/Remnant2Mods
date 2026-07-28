@@ -32,7 +32,15 @@ def main():
     for f in sorted(MASTER_LIST_DIR.glob("*.json")):
         if f.stem.endswith("_unmatched"):
             continue
-        entries.extend(json.loads(f.read_text(encoding="utf-8")))
+        data = json.loads(f.read_text(encoding="utf-8"))
+        if not isinstance(data, list) or not all(isinstance(e, dict) and "category" in e for e in data):
+            raise SystemExit(
+                f"{f.relative_to(ROOT)} doesn't look like a master-list file "
+                f"(expected a list of {{category, name, classPath}} objects) - "
+                f"dev-data/master_list/ must only contain category output files, "
+                f"put diagnostic/report files elsewhere."
+            )
+        entries.extend(data)
     entries.sort(key=lambda e: (e["category"], e["name"]))
 
     lines = [

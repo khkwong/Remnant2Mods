@@ -13,19 +13,15 @@ crafting materials instead of the mod itself - so this same approach is NOT
 assumed safe for every category. Recheck for that failure pattern before
 reusing this for a new category; see research doc 3.13.
 """
-import json
 import sys
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import write_json
+from lib import write_json, cargo_query
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "dev-data" / "master_list"
 
-API_URL = "https://remnant2.wiki.gg/api.php"
 CLASSES = ["Long Gun", "Handgun", "Melee Weapon"]
 
 # Polygun is one inventory item with two firing modes; the wiki lists it
@@ -35,23 +31,6 @@ NAME_OVERRIDES = {
     "Polygun (Marksman)": "Polygun",
     "Polygun (Shotgun)": "Polygun",
 }
-
-
-def cargo_query(class_name: str) -> list:
-    params = {
-        "action": "cargoquery",
-        "tables": "items",
-        "fields": "name,filepath,class",
-        "where": f'class="{class_name}"',
-        "format": "json",
-        "limit": "500",
-    }
-    url = API_URL + "?" + urllib.parse.urlencode(params)
-    # remnant2.wiki.gg (MediaWiki) 403s requests with no/generic User-Agent.
-    req = urllib.request.Request(url, headers={"User-Agent": "InventoryTracker-BuildPipeline/1.0 (Remnant2Mods repo)"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.load(resp)
-    return [row["title"] for row in data.get("cargoquery", [])]
 
 
 def main():

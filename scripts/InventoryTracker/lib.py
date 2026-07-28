@@ -9,10 +9,14 @@ pathlib, which is why this pipeline lives here instead.
 """
 import json
 import re
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 # Sub-asset folders that are never the item's own defining file.
 NON_ITEM_DIRS = {"Materials", "Material", "Textures", "VFX", "Animations"}
+
+CARGO_API_URL = "https://remnant2.wiki.gg/api.php"
 
 
 def normalize(s: str) -> str:
@@ -50,6 +54,34 @@ def write_json(path: Path, data) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
+
+
+def cargo_query(class_name: str) -> list:
+    """Query remnant2.wiki.gg's Cargo/Librarian API for every item of a
+    given `class` (e.g. "Ring", "Long Gun", "Helmet"). Returns a list of
+    {name, filepath, class} dicts - filepath is already the FULL classPath
+    (Package.ClassName_C), not a bare Package path, unlike find_package()
+    above.
+
+    NOT uniformly trustworthy across all classes - "Weapon Mod" had ~15
+    entries where filepath silently pointed to an unrelated crafting
+    material instead of the mod itself (research doc 3.13). Sample and
+    spot-check any new class against known-good data before trusting it.
+    """
+    params = {
+        "action": "cargoquery",
+        "tables": "items",
+        "fields": "name,filepath,class",
+        "where": f'class="{class_name}"',
+        "format": "json",
+        "limit": "500",
+    }
+    url = CARGO_API_URL + "?" + urllib.parse.urlencode(params)
+    # remnant2.wiki.gg (MediaWiki) 403s requests with no/generic User-Agent.
+    req = urllib.request.Request(url, headers={"User-Agent": "InventoryTracker-BuildPipeline/1.0 (Remnant2Mods repo)"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.load(resp)
+    return [row["title"] for row in data.get("cargoquery", [])]
 
 
 def is_real_item_file(path: Path) -> bool:
