@@ -1,5 +1,26 @@
 # TODO / open questions
 
+## InventoryTracker: full UI vision deferred to Blueprint modding
+
+**Status 2026-07-28: deferred, not abandoned.** User's original ask for the InventoryTracker UI: a spreadsheet-style popup, a tab per category, two columns per row (item name — colored green if owned, red if missing; a clickable link to that item's wiki page). Explicitly set aside until the user is ready to invest time in learning Blueprint/UE project work — pick this back up then, don't rediscover the ask from scratch.
+
+**Why it's deferred**: the blocker is clickability, not the visuals. UE4SS Lua cannot bind `MulticastInlineDelegateProperty` at all — confirmed twice (`MoreLoadoutSlots`' extra loadout tiles, research doc §3.4o; reconfirmed here since a from-scratch Lua-built `Button` has no existing Blueprint click-handler function to hook-forward from, unlike that earlier case which at least had one to work around with). That rules out real clickable tab buttons and clickable wiki-link hyperlinks in pure Lua. Everything else — colored text, scrolling, a background, nested layout — **is** achievable in pure Lua and was proven live (research doc §3.17 has the full technical recipe). Current plan: ship a Lua-only MVP first (one scrollable list instead of tabs, plain-text wiki-link column instead of clickable), and build the full vision as a Blueprint-modding project later.
+
+**MVP construction fully proven, 2026-07-28** (research doc §3.17, points 6-8): a bounded, colored, scrollable panel — `Overlay → SizeBox(900×500) → Border → ScrollBox → VerticalBox → rows` (each row a `HorizontalBox` with a colored name `TextBlock` + plain-text URL `TextBlock`), positioned top-left, mouse-wheel scrolling working, character still controllable while it's open (`SetInputMode_GameAndUIEx`) — all confirmed live in-game with 30 test rows. No remaining unknowns for this shape; next step is wiring it up to `InventoryTracker`'s real `MASTER_LIST` + ownership data instead of test rows, plus keybind-driven category switching.
+
+**Lua-only vs. Blueprint modding, for when this gets picked back up:**
+
+| | Lua-only (current MVP) | Blueprint modding |
+|---|---|---|
+| Clickable tabs/buttons | ❌ blocked (delegate limitation) | ✅ compiled delegates work normally |
+| Clickable wiki hyperlinks | ❌ blocked, or unproven `RichTextBlock` decorator/`LaunchURL` territory | ✅ straightforward |
+| Colored rows, scrolling, background | ✅ proven (research doc §3.17) | ✅ (and easier — visual designer instead of blind struct write-back from Lua) |
+| Iteration speed | Hot-reload, seconds per change | Cook + package a `.pak`, full rebuild per change |
+| New tooling needed | None — same as every mod so far | A real UE 5.2 project (`Rem2Proj`-style setup, research doc §4.2 step 8 — flagged early, never actually used in this project) |
+| Data bridging | Direct — Lua reads `TraitsComponent`/inventory and writes straight into the widgets it built | Lua would still own all the data-reading (native game state isn't reachable from a static Blueprint asset), then instantiate the custom Blueprint widget via `WidgetBlueprintLibrary.Create` — the *same* proven call already used for `Widget_Loadout_C` — and feed it data through exposed properties/functions |
+
+Nothing built for the Lua MVP is wasted if/when the Blueprint version happens — the data-reading Lua side (ownership scans, `TraitsComponent` reads) carries over unchanged either way; only the widget-construction half would be replaced.
+
 ## Was the T/I/M tab-hotkey suppression ever actually needed?
 
 **RESOLVED 2026-07-14 (EquipmentSearch): yes, keep it.** The equipment-screen
