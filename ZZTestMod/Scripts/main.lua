@@ -4,40 +4,34 @@ print("[ZZTestMod] Loaded - idle (no active probes).\n")
 -- LoadoutNamer/, EquipmentSearch/, and InventoryTracker/ (each
 -- <Mod>/Scripts/main.lua).
 --
--- IDLE. Last campaign: InventoryTracker UI architecture (2026-07-28),
--- 6 rounds, all concluded and shipped into InventoryTracker/Scripts/
--- main.lua; findings recorded in docs/remnant2-modding-research.md 3.17.
--- Summary of what they proved:
---   - A full bare-Lua UMG widget tree (no existing Blueprint template asset
---     needed) is constructible and safe: StaticConstructObject on native
---     /Script/UMG.* classes (UserWidget, WidgetTree, TextBlock, ScrollBox,
---     VerticalBox, HorizontalBox, Border, SizeBox, Overlay), nested via
---     plain :AddChild() calls.
---   - A bare UserWidget's auto-populated .WidgetTree is NOT writable -
---     construct your own and assign it (newPanel.WidgetTree = ourTree)
---     before touching anything else.
---   - Struct properties (TextBlock.ColorAndOpacity, Border.BrushColor,
---     PanelSlot.Size) need read-modify-write-BACK, never in-place mutation
---     of the original reference (research doc 3.4bb, re-confirmed on
---     freshly-constructed widgets too, not just existing live ones).
---   - AddToViewport's own CanvasPanelSlot is never reliably writable via
---     Lua (bAutoSize stayed "UObject instance is nullptr" even after a
---     40x/2s poll) - route around it with an Overlay + AddChild instead,
---     since AddChild-populated slots have been reliable every time.
---   - SetInputMode isn't reflected at all - use WidgetBlueprintLibrary's
---     SetInputMode_GameAndUIEx (Ex-suffixed Blueprint-node wrapper), which
---     conveniently takes only plain args, not the FInputModeGameAndUI
---     struct the raw API needs.
---   - Raw .Text writes on an ALREADY-LIVE widget (already AddChild'd and
---     on screen) don't reliably update - call the real SetText(FText(...))
---     function instead. Text set BEFORE a widget enters the tree (the
---     normal case for freshly-built rows) works fine either way.
---   - UE4SS's Key table uses underscore-separated names (Key.PAGE_UP, not
---     Key.PageUp) - check docs.ue4ss.com/lua-api/table-definitions/key.html
---     before assuming a key name, camelCase guesses fail silently at
---     RegisterKeyBind's overload resolution (not even a runtime error -
---     mod fails to load at all).
+-- IDLE. Last campaign: can InventoryTracker's wiki links be made genuinely
+-- clickable (2026-07-30), 4 rounds, concluded - findings recorded in
+-- docs/remnant2-modding-research.md 3.18. Summary:
+--   - RegisterHook is a genuinely different mechanism from delegate binding
+--     (doesn't touch MulticastInlineDelegateProperty at all - confirmed via
+--     UE4SS docs and a public precedent hooking a base UMG engine class),
+--     but click detection via it turned out to be a dead end anyway: a
+--     RegisterHook("/Script/UMG.UserWidget:OnMouseButtonDown", ...) hook
+--     registered with no error but never fired once, across three distinct
+--     target types (our own bare-constructed nested-UserWidget wrapper,
+--     real interactive menu buttons, and blank non-interactive menu
+--     background) - treated as exhausted rather than a guess away from
+--     working.
+--   - class:ForEachFunction(callback) safely enumerates every real
+--     UFunction on a class/struct (callback gets the UFunction; use
+--     fn:GetFName():ToString() for its name) - use this instead of
+--     guessing function names for RegisterHook targets. Found mouse
+--     events (OnMouseButtonDown etc) exist ONLY on UserWidget, not on
+--     Widget or individual leaf widgets like TextBlock.
+--   - UKismetSystemLibrary::LaunchURL(FString) DOES work - found via
+--     StaticFindObject("/Script/Engine.Default__KismetSystemLibrary"),
+--     called as ksl:LaunchURL(url) with a plain Lua string. User-confirmed:
+--     opens a real browser tab. This half of "clickable link" is solved
+--     and reusable by any trigger mechanism, including the keyboard-driven
+--     row-selection fallback (TODO.md) that this campaign's conclusion
+--     points back to.
 --
 -- Older diagnostics (loadout probes, input logger, delegate Add() test,
 -- chain tracers, EquipmentSearch P1-P8, InventoryTracker trait ownership
--- probes) are all recoverable from git history.
+-- probes, InventoryTracker UI-construction rounds) are all recoverable
+-- from git history.
