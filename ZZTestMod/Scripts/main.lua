@@ -1,125 +1,43 @@
-print("[ZZTestMod] Loaded - probing TraitsComponent (F9 in-game to run).\n")
+print("[ZZTestMod] Loaded - idle (no active probes).\n")
 
 -- Research scratchpad only. Feature code lives in MoreLoadoutSlots/,
 -- LoadoutNamer/, EquipmentSearch/, and InventoryTracker/ (each
 -- <Mod>/Scripts/main.lua).
 --
--- ACTIVE PROBE (2026-07-28): InventoryTracker traits support - confirming how
--- to read which traits the player owns/has leveled. CXX header dump
--- (GunfireRuntime.hpp) already answered the shape without touching the game:
---   - UTraitsComponent (ActorComponent) has TArray<FTraitInfo> Traits - this
---     looks like the actual owned-trait list (parallel to
---     RemnantPlayerInventoryComponent.Items for rings/amulets/etc).
---   - FTraitInfo has: TraitBP (TSubclassOf<UTrait>, the class ref to compare
---     against MASTER_LIST classPath, same GetFullName() pattern already
---     proven for items), Level (int32, 0-10 allocated points), bNewTrait,
---     plus SlotIndex/InstanceData/Transient/LevelMods/MaxLevelMods (probably
---     not needed).
---   - UTraitsComponent also has TArray<TSubclassOf<UTrait>> AvailableTraits -
---     unclear yet whether this is "all traits that exist" (not useful, we
---     have that from the wiki+FModel already) or something narrower. This
---     probe logs both array lengths so we can tell them apart empirically.
---   - Both Traits and AvailableTraits are plain properties (no function
---     call needed) - same safety class as LoadoutComponent.Slots and
---     RemnantPlayerInventoryComponent.Items, both already proven safe to
---     read directly. Not calling HasTrait/GetTraitLevel/GetAvailableTraits
---     for this probe on purpose - stay on the safest rung first.
+-- IDLE. Last campaign: InventoryTracker UI architecture (2026-07-28),
+-- 6 rounds, all concluded and shipped into InventoryTracker/Scripts/
+-- main.lua; findings recorded in docs/remnant2-modding-research.md 3.17.
+-- Summary of what they proved:
+--   - A full bare-Lua UMG widget tree (no existing Blueprint template asset
+--     needed) is constructible and safe: StaticConstructObject on native
+--     /Script/UMG.* classes (UserWidget, WidgetTree, TextBlock, ScrollBox,
+--     VerticalBox, HorizontalBox, Border, SizeBox, Overlay), nested via
+--     plain :AddChild() calls.
+--   - A bare UserWidget's auto-populated .WidgetTree is NOT writable -
+--     construct your own and assign it (newPanel.WidgetTree = ourTree)
+--     before touching anything else.
+--   - Struct properties (TextBlock.ColorAndOpacity, Border.BrushColor,
+--     PanelSlot.Size) need read-modify-write-BACK, never in-place mutation
+--     of the original reference (research doc 3.4bb, re-confirmed on
+--     freshly-constructed widgets too, not just existing live ones).
+--   - AddToViewport's own CanvasPanelSlot is never reliably writable via
+--     Lua (bAutoSize stayed "UObject instance is nullptr" even after a
+--     40x/2s poll) - route around it with an Overlay + AddChild instead,
+--     since AddChild-populated slots have been reliable every time.
+--   - SetInputMode isn't reflected at all - use WidgetBlueprintLibrary's
+--     SetInputMode_GameAndUIEx (Ex-suffixed Blueprint-node wrapper), which
+--     conveniently takes only plain args, not the FInputModeGameAndUI
+--     struct the raw API needs.
+--   - Raw .Text writes on an ALREADY-LIVE widget (already AddChild'd and
+--     on screen) don't reliably update - call the real SetText(FText(...))
+--     function instead. Text set BEFORE a widget enters the tree (the
+--     normal case for freshly-built rows) works fine either way.
+--   - UE4SS's Key table uses underscore-separated names (Key.PAGE_UP, not
+--     Key.PageUp) - check docs.ue4ss.com/lua-api/table-definitions/key.html
+--     before assuming a key name, camelCase guesses fail silently at
+--     RegisterKeyBind's overload resolution (not even a runtime error -
+--     mod fails to load at all).
 --
--- What this probe does: on F9, finds the live TraitsComponent for the
--- player pawn (FindAllOf + GetOuter match, same pattern as
--- findOwnedInventoryComponent in InventoryTracker/Scripts/main.lua), logs
--- TraitPoints/MaxTraitPoints, the length of AvailableTraits vs Traits, then
--- every entry in Traits (TraitBP's /Game/... class path + Level).
---
--- IF THIS WORKS: readOwnedClassPaths-style logic for traits reads
--- Traits[i].TraitBP:GetFullName() + Traits[i].Level directly, no function
--- calls, no crash risk beyond generic pcall-wrapped property access already
--- proven throughout this project.
-
-RegisterKeyBind(Key.F9, function()
-    ExecuteInGameThread(function()
-        local pawn = FindFirstOf("Character_Master_Player_C")
-        if not pawn then
-            print("[ZZTestMod] F9: no player pawn found.\n")
-            return
-        end
-
-        local all = FindAllOf("TraitsComponent")
-        if not all then
-            print("[ZZTestMod] F9: FindAllOf('TraitsComponent') returned nothing.\n")
-            return
-        end
-        print(string.format("[ZZTestMod] F9: %d TraitsComponent instance(s) found.\n", #all))
-
-        local comp = nil
-        for _, c in ipairs(all) do
-            local okOuter, owner = pcall(function() return c:GetOuter() end)
-            if okOuter and owner then
-                local okSame, same = pcall(function() return owner:GetFullName() == pawn:GetFullName() end)
-                if okSame and same then
-                    comp = c
-                    break
-                end
-            end
-        end
-
-        if not comp then
-            print("[ZZTestMod] F9: no TraitsComponent matched to the player pawn via GetOuter - logging all instances' owners instead.\n")
-            for i, c in ipairs(all) do
-                local okOuter, owner = pcall(function() return c:GetOuter() end)
-                local ownerName = (okOuter and owner and select(2, pcall(function() return owner:GetFullName() end))) or "?"
-                print(string.format("[ZZTestMod]   instance %d owner: %s\n", i, tostring(ownerName)))
-            end
-            return
-        end
-
-        local okPoints, points = pcall(function() return comp.TraitPoints end)
-        local okMax, maxPoints = pcall(function() return comp.MaxTraitPoints end)
-        print(string.format("[ZZTestMod] F9: TraitPoints=%s MaxTraitPoints=%s\n",
-            okPoints and tostring(points) or "?", okMax and tostring(maxPoints) or "?"))
-
-        local okAvail, avail = pcall(function() return comp.AvailableTraits end)
-        if okAvail and avail then
-            local okLen, len = pcall(function() return #avail end)
-            print(string.format("[ZZTestMod] F9: AvailableTraits length=%s\n", okLen and tostring(len) or "?"))
-        else
-            print("[ZZTestMod] F9: AvailableTraits unreadable.\n")
-        end
-
-        local okTraits, traits = pcall(function() return comp.Traits end)
-        if not okTraits or traits == nil then
-            print("[ZZTestMod] F9: comp.Traits unreadable.\n")
-            return
-        end
-        local okLen, len = pcall(function() return #traits end)
-        if not okLen then
-            print("[ZZTestMod] F9: #traits unreadable.\n")
-            return
-        end
-        print(string.format("[ZZTestMod] F9: Traits length=%d\n", len))
-
-        for i = 1, len do
-            local okEntry, entry = pcall(function() return traits[i] end)
-            if okEntry and entry ~= nil then
-                local unwrapped = entry
-                if type(entry) == "userdata" then
-                    local okGet, inner = pcall(function() return entry:get() end)
-                    if okGet and inner ~= nil then unwrapped = inner end
-                end
-                local okLevel, level = pcall(function() return unwrapped.Level end)
-                local okBP, traitBP = pcall(function() return unwrapped.TraitBP end)
-                local pathStr = "?"
-                if okBP and traitBP ~= nil then
-                    local okPath, path = pcall(function() return traitBP:GetFullName() end)
-                    if okPath and path then pathStr = path end
-                end
-                print(string.format("[ZZTestMod]   [%d] Level=%s TraitBP=%s\n",
-                    i, okLevel and tostring(level) or "?", pathStr))
-            else
-                print(string.format("[ZZTestMod]   [%d] entry unreadable.\n", i))
-            end
-        end
-    end)
-end)
-
-print("[ZZTestMod] Ready - press F9 in-game to dump TraitsComponent state.\n")
+-- Older diagnostics (loadout probes, input logger, delegate Add() test,
+-- chain tracers, EquipmentSearch P1-P8, InventoryTracker trait ownership
+-- probes) are all recoverable from git history.
