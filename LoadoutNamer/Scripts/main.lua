@@ -3,10 +3,11 @@ print("[LoadoutNamer] Loaded and running.\n")
 -- Mod #2: custom names for loadout slots.
 --   Hover a loadout tile and press the rename key (F2 by default, configurable via
 --   settings.txt) -> a text box opens in the tile's title row. Type the new name, then
---   Enter or the rename key commits; Escape cancels. Names persist in loadout_names.txt
---   next to this mod (one "recordIndex<TAB>name" line per slot) and are re-applied
---   every time the Loadouts panel is constructed. The hover tooltip's title also shows
---   the (full, untruncated) name; long names show truncated on the tile itself.
+--   Enter or the rename key commits; Escape cancels. Names persist per-character in
+--   loadout_names.txt next to this mod (one "characterID<TAB>recordIndex<TAB>name"
+--   line per slot) and are re-applied every time the Loadouts panel is constructed.
+--   The hover tooltip's title also shows the (full, untruncated) name; long names
+--   show truncated on the tile itself.
 --
 -- Everything here composes building blocks proven in ZZTestMod probe rounds 1-2
 -- (research doc 3.4y/3.4z): LabelOverride FText writes survive the game's own
@@ -61,7 +62,121 @@ local NAMES_FILE_CANDIDATES = {
 }
 
 local namesFilePath = nil
-local names = {} -- [recordIndex] = custom name
+local names = {} -- [characterID][recordIndex] = custom name
+local legacyNames = {} -- [recordIndex] = name, pre-update entries pending migration once a character ID is known
+local saveNames -- forward-declared: migrateLegacyNamesIfNeeded (below) calls it before its own definition further down
+
+-- Which of the 4 character-select slots is active right now (SavedCharacter.ID,
+-- research 2026-08-04 - see resolveActiveCharacterID below). Refreshed on every
+-- apply pass so it's always current by the time the player can interact.
+local activeCharacterID = nil
+local FALLBACK_CHARACTER_ID = 0
+local fallbackWarned = false
+
+-- Every read/write of a saved name goes through these three so callers never touch
+-- `names` directly - keeps the character-scoping in one place.
+local function characterKey()
+  if activeCharacterID ~= nil then
+    return activeCharacterID
+  end
+  if not fallbackWarned then
+    fallbackWarned = true
+    print("[LoadoutNamer] WARNING: could not resolve the active character's ID yet - names will use a shared fallback store until this resolves (usually on the next Loadouts screen open).\n")
+  end
+  return FALLBACK_CHARACTER_ID
+end
+
+local function getName(recordIndex)
+  local t = names[characterKey()]
+  return t and t[recordIndex]
+end
+
+local function setName(recordIndex, name)
+  local key = characterKey()
+  local t = names[key]
+  if not t then
+    t = {}
+    names[key] = t
+  end
+  t[recordIndex] = name
+end
+
+local function clearName(recordIndex)
+  local t = names[characterKey()]
+  if t then
+    t[recordIndex] = nil
+  end
+end
+
+-- Merges pre-update (recordIndex-only) entries into the first character that loads
+-- after this update, then rewrites the file in the new per-character format. Only
+-- runs once (legacyNames is emptied after). User-decided migration behavior
+-- (2026-08-04): auto-assign to whichever character loads first rather than
+-- discarding, since these names predate per-character keying and there's no way
+-- to recover which character they actually belonged to.
+local function migrateLegacyNamesIfNeeded()
+  if not next(legacyNames) or activeCharacterID == nil then
+    return
+  end
+  local target = names[activeCharacterID]
+  if not target then
+    target = {}
+    names[activeCharacterID] = target
+  end
+  local migrated = 0
+  for idx, nm in pairs(legacyNames) do
+    if target[idx] == nil then
+      target[idx] = nm
+      migrated = migrated + 1
+    end
+  end
+  legacyNames = {}
+  if migrated > 0 then
+    print(string.format("[LoadoutNamer] Migrated %d pre-update name(s) to character ID %d (the first character loaded after this update) - if any ended up on the wrong character, just F2-rename them there; loadout_names.txt now stores names per character.\n", migrated, activeCharacterID))
+    saveNames()
+  end
+end
+
+local function firstNonDefault(className)
+  local found = nil
+  pcall(function()
+    local all = FindAllOf(className)
+    if all then
+      for _, obj in ipairs(all) do
+        if obj:IsValid() and not obj:GetFullName():find("Default__") then
+          found = obj
+          break
+        end
+      end
+    end
+  end)
+  return found
+end
+
+-- Confirmed 2026-08-04 via ZZTestMod F9 probe: GameInstance.CharacterManager is a
+-- RemnantCharacterManager whose GetActiveCharacter() returns a SavedCharacter struct
+-- with an ID int property that matches the "SELECT CHARACTER" slot (0-3 for the 4
+-- tabs) - the per-character identity this store was missing (all names used to be
+-- keyed by recordIndex alone, so they leaked across characters). Both calls are
+-- non-mutating, no-arg getters - the safe end of the risk ladder; H8's caution about
+-- native calls is specifically about RegisterHook bodies, not game-thread reads like
+-- this (called from the apply pass, already on the game thread).
+local function resolveActiveCharacterID()
+  local id = nil
+  local gi = firstNonDefault("GameInstance")
+  if gi and gi:IsValid() then
+    pcall(function()
+      local charMgr = gi.CharacterManager
+      if charMgr and charMgr:IsValid() and charMgr:HasActiveCharacter() then
+        local active = charMgr:GetActiveCharacter()
+        if active and active:IsValid() then
+          id = active.ID
+        end
+      end
+    end)
+  end
+  return id
+end
 
 local function resolveNamesFilePath()
   for _, path in ipairs(NAMES_FILE_CANDIDATES) do
@@ -81,29 +196,43 @@ local function resolveNamesFilePath()
   return nil
 end
 
+-- File format is `characterID<TAB>recordIndex<TAB>name` (2026-08-04, per-character
+-- keying added - see resolveActiveCharacterID). Lines from before that update are
+-- `recordIndex<TAB>name` (2 columns) - those fall into legacyNames and get merged
+-- into whichever character loads first (migrateLegacyNamesIfNeeded).
 local function loadNames()
   namesFilePath = resolveNamesFilePath()
   if not namesFilePath then
     print("[LoadoutNamer] WARNING: no writable names-file location found (tried: " .. table.concat(NAMES_FILE_CANDIDATES, ", ") .. ") - renames will work but WILL NOT persist across sessions.\n")
     return
   end
-  local count = 0
+  local count, legacyCount = 0, 0
   local f = io.open(namesFilePath, "r")
   if f then
     for line in f:lines() do
-      local idx, name = line:match("^(%d+)\t(.+)$")
-      if idx and name then
+      local charId, idx, name = line:match("^(%d+)\t(%d+)\t(.+)$")
+      if charId and idx and name then
+        charId, idx = tonumber(charId), tonumber(idx)
         -- Enforce the length cap on pre-existing entries too (older saves may predate it).
-        names[tonumber(idx)] = name:sub(1, MAX_NAME_LENGTH):match("^(.-)%s*$")
+        local trimmed = name:sub(1, MAX_NAME_LENGTH):match("^(.-)%s*$")
+        names[charId] = names[charId] or {}
+        names[charId][idx] = trimmed
         count = count + 1
+      else
+        local legIdx, legName = line:match("^(%d+)\t(.+)$")
+        if legIdx and legName then
+          legacyNames[tonumber(legIdx)] = legName:sub(1, MAX_NAME_LENGTH):match("^(.-)%s*$")
+          legacyCount = legacyCount + 1
+        end
       end
     end
     f:close()
   end
-  print(string.format("[LoadoutNamer] Names file: %s (%d saved names loaded).\n", namesFilePath, count))
+  print(string.format("[LoadoutNamer] Names file: %s (%d saved name(s) loaded%s).\n", namesFilePath, count,
+    legacyCount > 0 and string.format(", %d pre-update name(s) pending migration to the active character", legacyCount) or ""))
 end
 
-local function saveNames()
+saveNames = function()
   if not namesFilePath then
     return
   end
@@ -112,8 +241,10 @@ local function saveNames()
     print("[LoadoutNamer] FAILED to write the names file: " .. tostring(err) .. "\n")
     return
   end
-  for idx, name in pairs(names) do
-    f:write(string.format("%d\t%s\n", idx, name))
+  for charId, charNames in pairs(names) do
+    for idx, name in pairs(charNames) do
+      f:write(string.format("%d\t%d\t%s\n", charId, idx, name))
+    end
   end
   f:close()
 end
@@ -215,25 +346,37 @@ end
 
 -- Game thread only. Puts the slot's correct at-rest label on the tile.
 local function applyRestingLabel(tile, recordIndex)
-  local name = names[recordIndex]
+  local name = getName(recordIndex)
   writeLabel(tile, name and tileTextFor(name) or defaultLabelFor(recordIndex))
 end
 
 -- ============================== apply pass ==============================
 
 -- Game thread only. Writes saved names onto tiles 0..count-1. Only ever touches tiles
--- that HAVE a saved name (the `names[idx]` guard below) - it never writes a tile's
+-- that HAVE a saved name (the `getName(idx)` guard below) - it never writes a tile's
 -- default label, so it can never race MoreLoadoutSlots' own default-label pass no
 -- matter which order the two mods' hooks run in. That's what makes calling this
 -- repeatedly, on whatever tile count exists at the time, safe and idempotent.
 local function applyNamesToCount(panel, count)
+  -- Refreshed every apply pass (every Loadouts screen construction) rather than
+  -- cached once - cheap (one read-only getter call), and this is what makes a
+  -- character switch (which reconstructs the whole panel/world) pick up the right
+  -- character's names instead of the previous character's.
+  local resolvedId = resolveActiveCharacterID()
+  if resolvedId ~= nil and resolvedId ~= activeCharacterID then
+    activeCharacterID = resolvedId
+    migrateLegacyNamesIfNeeded()
+    print(string.format("[LoadoutNamer] Active character ID: %d.\n", activeCharacterID))
+  end
+
   local applied = 0
   for i = 0, count - 1 do
     local ok = pcall(function()
       local tile = panel.LoadoutList:GetChildAt(i)
       local idx = tile.Index
-      if names[idx] then
-        if writeLabel(tile, tileTextFor(names[idx])) then
+      local nm = getName(idx)
+      if nm then
+        if writeLabel(tile, tileTextFor(nm)) then
           applied = applied + 1
         end
       end
@@ -439,7 +582,7 @@ local tooltipGen = 0
 local function scheduleTooltipTitle(recordIndex)
   tooltipGen = tooltipGen + 1
   local gen = tooltipGen
-  local title = names[recordIndex] or TOOLTIP_DEFAULT_TITLE
+  local title = getName(recordIndex) or TOOLTIP_DEFAULT_TITLE
   local attempts = 0
   local logged = false
 
@@ -831,12 +974,12 @@ local function endRename(commit)
     end
 
     if text == "" then
-      names[idx] = nil
+      clearName(idx)
       saveNames()
       applyRestingLabel(tile, idx)
       print(string.format("[LoadoutNamer] Custom name removed from record %d - back to its default label.\n", idx))
     else
-      names[idx] = text
+      setName(idx, text)
       saveNames()
       applyRestingLabel(tile, idx)
       print(string.format("[LoadoutNamer] Record %d named '%s' (saved).\n", idx, text))

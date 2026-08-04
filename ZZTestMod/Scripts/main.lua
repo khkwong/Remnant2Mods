@@ -4,34 +4,20 @@ print("[ZZTestMod] Loaded - idle (no active probes).\n")
 -- LoadoutNamer/, EquipmentSearch/, and InventoryTracker/ (each
 -- <Mod>/Scripts/main.lua).
 --
--- IDLE. Last campaign: can InventoryTracker's wiki links be made genuinely
--- clickable (2026-07-30), 4 rounds, concluded - findings recorded in
--- docs/remnant2-modding-research.md 3.18. Summary:
---   - RegisterHook is a genuinely different mechanism from delegate binding
---     (doesn't touch MulticastInlineDelegateProperty at all - confirmed via
---     UE4SS docs and a public precedent hooking a base UMG engine class),
---     but click detection via it turned out to be a dead end anyway: a
---     RegisterHook("/Script/UMG.UserWidget:OnMouseButtonDown", ...) hook
---     registered with no error but never fired once, across three distinct
---     target types (our own bare-constructed nested-UserWidget wrapper,
---     real interactive menu buttons, and blank non-interactive menu
---     background) - treated as exhausted rather than a guess away from
---     working.
---   - class:ForEachFunction(callback) safely enumerates every real
---     UFunction on a class/struct (callback gets the UFunction; use
---     fn:GetFName():ToString() for its name) - use this instead of
---     guessing function names for RegisterHook targets. Found mouse
---     events (OnMouseButtonDown etc) exist ONLY on UserWidget, not on
---     Widget or individual leaf widgets like TextBlock.
---   - UKismetSystemLibrary::LaunchURL(FString) DOES work - found via
---     StaticFindObject("/Script/Engine.Default__KismetSystemLibrary"),
---     called as ksl:LaunchURL(url) with a plain Lua string. User-confirmed:
---     opens a real browser tab. This half of "clickable link" is solved
---     and reusable by any trigger mechanism, including the keyboard-driven
---     row-selection fallback (TODO.md) that this campaign's conclusion
---     points back to.
+-- IDLE. Last campaign (2026-08-04): found the per-character identity
+-- LoadoutNamer needed to stop names leaking across the 4 character-select
+-- slots. F9 probe walked the full class inheritance chain (GetSuperStruct(),
+-- since ForEachProperty alone only sees a class's OWN declared properties -
+-- same lesson EquipmentSearch already learned for structs) on
+-- PlayerController/PlayerState/GameInstance/Pawn, surfacing
+-- GameInstance.CharacterManager (a RemnantCharacterManager). Its
+-- GetActiveCharacter() (non-mutating, no-arg getter - safe to call) returns
+-- a SavedCharacter struct with an ID IntProperty confirmed to differ per
+-- character (0 vs 1, verified across two characters in one session). Fix
+-- applied directly in LoadoutNamer/Scripts/main.lua; full writeup in
+-- docs/remnant2-modding-research.md 3.19.
 --
 -- Older diagnostics (loadout probes, input logger, delegate Add() test,
 -- chain tracers, EquipmentSearch P1-P8, InventoryTracker trait ownership
--- probes, InventoryTracker UI-construction rounds) are all recoverable
--- from git history.
+-- probes, InventoryTracker UI-construction rounds, clickable-link campaign
+-- concluded 2026-07-30) are all recoverable from git history.
