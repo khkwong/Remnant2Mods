@@ -45,7 +45,6 @@ on its own with the vanilla 8-slot panel.
 
 ## Known limitations
 
-- Names are shared per install, not per-character or per-save.
 - The reserved "Last Gear State" auto-save slot can't be renamed.
 - The edit box is a styled engine text box — close to the game's look, but
   not pixel-identical.
