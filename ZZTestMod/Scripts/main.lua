@@ -1,23 +1,28 @@
 print("[ZZTestMod] Loaded - idle (no active probes).\n")
 
 -- Research scratchpad only. Feature code lives in MoreLoadoutSlots/,
--- LoadoutNamer/, EquipmentSearch/, and InventoryTracker/ (each
--- <Mod>/Scripts/main.lua).
+-- LoadoutNamer/, EquipmentSearch/, InventoryTracker/, and
+-- PrismLegendaryReroller/ (each <Mod>/Scripts/main.lua).
 --
--- IDLE. Last campaign (2026-08-04): found the per-character identity
--- LoadoutNamer needed to stop names leaking across the 4 character-select
--- slots. F9 probe walked the full class inheritance chain (GetSuperStruct(),
--- since ForEachProperty alone only sees a class's OWN declared properties -
--- same lesson EquipmentSearch already learned for structs) on
--- PlayerController/PlayerState/GameInstance/Pawn, surfacing
--- GameInstance.CharacterManager (a RemnantCharacterManager). Its
--- GetActiveCharacter() (non-mutating, no-arg getter - safe to call) returns
--- a SavedCharacter struct with an ID IntProperty confirmed to differ per
--- character (0 vs 1, verified across two characters in one session). Fix
--- applied directly in LoadoutNamer/Scripts/main.lua; full writeup in
--- docs/remnant2-modding-research.md 3.19.
+-- IDLE. Last campaign (2026-08-04): mod #5 PrismLegendaryReroller research.
+-- Confirmed APrismStone::ServerFlushSegment(SegmentIndex, NumRefundLevels) is
+-- the legendary-only cleanse (distinct from ServerFlushPrismStone, the
+-- separate full-prism-to-0 reset, left untouched). Flushing the Mythic
+-- segment always passes NumRefundLevels=0 - the observed level-51->50 drop
+-- is a side effect of PrismStoneLevel being COMPUTED from segment content,
+-- not a stored field the call explicitly decrements. Fix: read
+-- GetPrismStoneLevel() synchronously inside the pre-hook (proven safe, novel
+-- operation for this project - every prior hook deferred native calls via
+-- ExecuteInGameThread); level==51 pre-flush is a reliable "this is the
+-- Mythic segment" signal since a Mythic segment can only exist on a maxed
+-- Prism. Then GetExperienceRequiredForLevel(51) + AddExperience() (deferred
+-- via ExecuteInGameThread) relevels it back to 51 through the game's own
+-- machinery, flipping CanRoll back to true. Confirmed end-to-end with a real
+-- in-game legendary reroll. Full writeup: docs/remnant2-modding-research.md
+-- 3.20. Feature code: PrismLegendaryReroller/Scripts/main.lua.
 --
 -- Older diagnostics (loadout probes, input logger, delegate Add() test,
 -- chain tracers, EquipmentSearch P1-P8, InventoryTracker trait ownership
 -- probes, InventoryTracker UI-construction rounds, clickable-link campaign
--- concluded 2026-07-30) are all recoverable from git history.
+-- concluded 2026-07-30, LoadoutNamer per-character identity fix 2026-08-04)
+-- are all recoverable from git history.

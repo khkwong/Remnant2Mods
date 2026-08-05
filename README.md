@@ -1,6 +1,6 @@
 # Remnant2Mods
 
-Three [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) Lua mods for **Remnant 2**
+[UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) Lua mods for **Remnant 2**
 (Steam/PC, Unreal Engine 5.2).
 
 | Mod | What it does |
@@ -8,6 +8,7 @@ Three [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) Lua mods for **Remnant 2**
 | [MoreLoadoutSlots](MoreLoadoutSlots/) | Raises the Character screen's loadout count from 8 to 20. |
 | [LoadoutNamer](LoadoutNamer/) | Rename loadout tiles with F2; names persist across sessions. |
 | [EquipmentSearch](EquipmentSearch/) | A working search bar for every inventory item grid, filtering by name and effect text. |
+| [PrismLegendaryReroller](PrismLegendaryReroller/) | Cleansing a Prism's legendary bonus no longer drops it back to level 50. |
 
 Each mod works standalone. See each mod's own README for details, and its
 `mod.json` for version/author metadata.

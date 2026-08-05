@@ -1,0 +1,9 @@
+{
+  "ModName": "PrismLegendaryReroller",
+  "ModVersion": "1.2.0",
+  "ModAuthor": "livingpillow",
+  "ModDescription": "Cleansing a Prism's legendary (Mythic) bonus no longer drops it from level 51 back to 50 - it stays at 51 so you can roll again immediately, without a full-prism reset and without releveling.",
+  "License": "MIT",
+  "Requires": "UE4SS (experimental-latest or stable v3.0.1 Beta)",
+  "Game": "Remnant 2 (Steam/PC)"
+}
