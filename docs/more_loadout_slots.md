@@ -6,10 +6,10 @@ Status: **feature-complete and user-confirmed** as of 2026-07-12 (solo and co-op
 
 - **20 loadout slots instead of 8** on the Character → Loadouts screen. The count is a single knob: `TOTAL_LOADOUT_SLOTS` at the top of `main.lua`.
 - **Record capacity**: on every player spawn (`PlayerController:ClientRestart` hook), all `LoadoutComponent.Slots[].NumRecords` are patched to `TOTAL + 1` (21) so the underlying storage accepts the high record indices.
-- **Extra tiles**: when the Loadouts panel is constructed (`NotifyOnNewObject` on `Widget_LoadoutsPanel_C`), 12 extra `Widget_Loadout_C` tiles are created via `WidgetBlueprintLibrary.Create` and appended to the panel's tile list, using record indices **8, 9, 11–20** — record **10 is skipped** (the game's reserved "Last Gear State" auto-save; a visible tile there self-overwrites on every equip).
+- `loadout_runtime.lua` waits for the panel to be ready. The mod then creates 12 extra tiles with `WidgetBlueprintLibrary.Create`.
 - **Scrolling**: the panel's fixed 688px tile area only fits 8 tiles, so a runtime-created engine `ScrollBox` is spliced into the widget tree (`SizeBox_0 → ScrollBox → LoadoutList`); overflow tiles are reached with the mouse wheel.
 - **Labels**: tiles past the skipped record get a pinned `LabelOverride` so on-screen names run a contiguous "Loadout 9".."Loadout 20" with no gap. (LoadoutNamer's custom names layer on top of this.)
-- **Interactions**: each mod tile subscribes the panel's own handlers to its delegates (`OnClicked`/`OnLoadoutSaved`/`OnLoadoutSlotDeleted` → `OnLoadoutClicked`/`OnLoadoutSlotSaved`/`OnLoadoutSlotDeleted`) — the exact bindings the panel gives the tiles it creates itself, so save/load/equip/delete behave 100% vanilla, including the equipped/empty gating and confirmation dialogs. A hook-forwarding fallback path exists for tiles whose native binding fails (it hasn't fired since the UE4SS experimental upgrade).
+- When multicast delegates are supported, tiles bind the panel's handlers. Otherwise they use the Lua hook-forwarding fallback.
 
 ## User guide
 
@@ -41,5 +41,4 @@ There is nothing to configure or learn — the extra slots behave exactly like t
 
 - The tile list has no gamepad-focus scrolling guarantee — scrolling was built and tested for mouse wheel (gamepad users may not reach slots 9+; untested).
 - Saving/equipping extra slots while in another player's co-op session is untested (H2 — LoadoutComponent write safety was proven with exactly one component instance, solo; a co-op session may hold several locally). Display/browsing in co-op is confirmed fine (§3.4cc).
-- The hook-forwarding fallback path (and its two behavioral gates) is dead code in practice since native delegate subscription works on experimental UE4SS — kept as a safety net because it's the only path that works if a UE4SS regression removes delegate `:Add()` support.
 - The "Loadout N" numbering assumes tiles are only ever appended by this mod; a vanilla patch that changes the base slot count or the reserved-record position (10) would misalign labels and the skip logic.

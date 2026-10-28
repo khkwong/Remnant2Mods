@@ -1,4 +1,5 @@
 print("[MoreLoadoutSlots] Loaded and running.\n")
+local runtime = require("loadout_runtime").new("MoreLoadoutSlots")
 
 -- The one knob: total loadout slots (vanilla has 8). Drives both the LoadoutComponent
 -- record-capacity patch and how many extra tiles get added to the Loadouts screen; the
@@ -328,13 +329,15 @@ local function addExtraLoadoutTile(panel)
       return false -- keep polling
     end
 
-    -- LoadoutList is valid - safe to proceed. Do the actual work inside the game thread.
+    -- On stable, the unsupported delegate read can abort its native callback
+    -- despite Lua pcall. Probe in a separate callback so the first injection
+    -- still runs, using the existing forwarding fallback when unsupported.
+    ExecuteInGameThread(function() probeMulticastDelegateSupport(list) end)
+
     ExecuteInGameThread(function()
       if not injectScrollBox(panel, list) then
         return -- without the ScrollBox, extra tiles would render below the visible panel
       end
-
-      probeMulticastDelegateSupport(list)
 
       -- Idempotency guard: this whole function can run again on a screen reopen (a fresh
       -- NotifyOnNewObject firing for a newly-constructed panel instance). Skip if the target
@@ -514,7 +517,8 @@ local function addExtraLoadoutTile(panel)
   end)
 end
 
-NotifyOnNewObject("/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_LoadoutsPanel.Widget_LoadoutsPanel_C", function(panel)
+runtime.watchPanels(function(panel)
   currentPanel = panel
   addExtraLoadoutTile(panel)
 end)
+runtime.start()
