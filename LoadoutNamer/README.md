@@ -4,9 +4,9 @@ Custom names for your loadout slots on the Character screen.
 
 ## What it does
 
-- Hover a loadout tile and press **F2** — a text box opens right in the
-  tile's title. Type a name, then **Enter** or **F2** to save it, **Escape**
-  to cancel.
+- Hover a loadout tile and press **F2** — a focused text box opens right in
+  the tile's title, with any existing custom name selected. Type a name,
+  then **Enter**, **F2**, or **click outside** to save it; **Escape** cancels.
 - Committing an empty name removes the custom name and restores the default
   ("Loadout N").
 - The tile shows up to 18 characters (truncated with `..`); hovering shows
@@ -48,11 +48,8 @@ on its own with the vanilla 8-slot panel.
 - The reserved "Last Gear State" auto-save slot can't be renamed.
 - The edit box is a styled engine text box — close to the game's look, but
   not pixel-identical.
-- **On stable UE4SS only**: the rename text box and the tooltip's "F2 Rename"
-  text fall back to the plain engine font/color instead of the game's styled
-  look (cosmetic only — renaming still works fully). You may also see repeated
-  harmless log lines about the rename prompt on stable; this doesn't affect
-  gameplay.
+- Stable UE4SS may log repeated rename-prompt messages while older tooltip
+  instances remain valid.
 
 ## License
 
