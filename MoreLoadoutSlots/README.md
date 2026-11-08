@@ -5,7 +5,7 @@ Raises the Character screen's loadout count from **8 to 20**.
 ## What it does
 
 - Adds 12 extra loadout tiles to the Loadouts panel, reachable by mouse-wheel
-  scrolling in a slim in-panel scrollbar.
+  scrolling with the vanilla advanced-stats scrollbar's styling and behavior.
 - Every extra slot behaves exactly like a vanilla slot: right-click to save,
   left-click or Space to equip, F to delete — same confirmation dialogs, same
   rules (can't overwrite the currently-equipped loadout, can't load/delete an
@@ -41,10 +41,6 @@ Raises the Character screen's loadout count from **8 to 20**.
 - Saving/equipping into an extra slot while in another player's co-op session
   is untested (should work, following the same rules as vanilla slots, but
   hasn't been verified).
-- **On stable UE4SS only**: the extra slots may not appear the very first time
-  you open the Loadouts screen after launch (a pre-existing UE4SS quirk on
-  stable, not caused by this mod) — close and reopen the screen once (or
-  hot-reload) and they'll show up for the rest of the session.
 
 ## License
 

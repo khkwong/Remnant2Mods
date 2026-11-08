@@ -3,7 +3,7 @@ print("[LoadoutNamer] Loaded and running.\n")
 -- Mod #2: custom names for loadout slots.
 --   Hover a loadout tile and press the rename key (F2 by default, configurable via
 --   settings.txt) -> a text box opens in the tile's title row. Type the new name, then
---   Enter or the rename key commits; Escape cancels. Names persist per-character in
+--   Enter, the rename key, or clicking away saves; Escape cancels. Names persist in
 --   loadout_names.txt next to this mod (one "characterID<TAB>recordIndex<TAB>name"
 --   line per slot) and are re-applied every time the Loadouts panel is constructed.
 --   The hover tooltip's title also shows the (full, untruncated) name; long names
@@ -14,8 +14,11 @@ print("[LoadoutNamer] Loaded and running.\n")
 -- refreshes; EditableTextBox injection + Text reads work; RegisterKeyBind fires in
 -- menu context; the OnMouseEnter bound-event hook gives hover identity.
 
-local PANEL_CLASS = "/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_LoadoutsPanel.Widget_LoadoutsPanel_C"
+local runtime = require("loadout_runtime").new("LoadoutNamer")
+local styles = require("loadout_style")
+local tick = require("game_tick").new(runtime.log)
 local MOUSE_ENTER_FN = "/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_Loadout.Widget_Loadout_C:BndEvt__Widget_Loadout_Button_K2Node_ComponentBoundEvent_4_OnAdvButtonClickedEvent__DelegateSignature"
+local TILE_CONSTRUCT_FN = "/Game/UI2/UI_Widgets/UI_Game/UI_Game_Character/Widget_Loadout.Widget_Loadout_C:Construct"
 
 -- Record 10 is the game's reserved last-gear-state auto-save (research doc 3.4w); it
 -- renders as the hoverable "Last Gear State" tile on the character screen (3.4z).
@@ -45,12 +48,6 @@ local EDIT_FONT_PATH = "/Game/UI/Fonts/GFGRemnantCracked_Font.GFGRemnantCracked_
 -- The game's reusable key-glyph widget (dev-data/Widget_KeyIcon.json): Background image
 -- + KeyText TextBlock. Used for the tooltip's "F2 Rename" prompt.
 local KEYICON_CLASS_PATH = "/Game/UI/UI_Widgets/Widget_KeyIcon.Widget_KeyIcon_C"
-
--- MoreLoadoutSlots builds the panel out to 20 tiles; waiting for that count sequences
--- our apply-names pass after its label pass with no explicit coordination (3.4y).
--- If that mod is ever disabled, the 8-tile vanilla panel would time the poll out - the
--- fallback below then applies names to however many tiles exist.
-local EXPECTED_TILES = 20
 
 -- ============================== name store ==============================
 
@@ -390,39 +387,18 @@ local function applyNamesToCount(panel, count)
   end
 end
 
--- MoreLoadoutSlots injects its extra tiles synchronously - one panel-construction poll
--- cycle takes the tile count straight from 8 to EXPECTED_TILES in a single tick, it
--- never grows gradually (see MoreLoadoutSlots/Scripts/main.lua addExtraLoadoutTile).
--- So there's nothing to "wait until it's safe" for: apply on the very first tick to
--- whatever tile count already exists (instant in the common case, including without
--- MoreLoadoutSlots), then keep polling only to catch a LATER count change (that mod
--- present but still mid-injection) and redo the pass when it happens. Previously this
--- blocked the first apply on reaching EXPECTED_TILES, which without MoreLoadoutSlots
--- (vanilla 8-tile panel, count never reaches it) burned the full ~4s timeout on every
--- panel construction before applying anything - the couple-second delay reported
--- 2026-07-17.
+-- MoreLoadoutSlots adds its tiles inside the same panel Construct, before or after
+-- this mod's readiness hook depending on hook registration order. The panel pass
+-- resolves the character and names every tile present. Each tile's own Construct
+-- then names tiles added later to that list. Tiles constructed before the panel pass
+-- are skipped there, so a character switch never applies the previous character's
+-- names. Full names identify the list, which survives address reuse.
+local readyListName = nil
+
 local function applySavedNames(panel)
-  local attempts = 0
-  local MAX_ATTEMPTS = 80 -- ~4s safety cap on how long to keep watching for a late count change
-  local lastAppliedCount = -1
-
-  LoopAsync(50, function()
-    attempts = attempts + 1
-
-    local countOk, count = pcall(function() return panel.LoadoutList:GetChildrenCount() end)
-    local haveList = countOk and count and count > 0
-
-    if not haveList then
-      return attempts >= MAX_ATTEMPTS -- benign non-UI panel instance; nothing to do
-    end
-
-    if count ~= lastAppliedCount then
-      lastAppliedCount = count
-      ExecuteInGameThread(function() applyNamesToCount(panel, count) end)
-    end
-
-    return count >= EXPECTED_TILES or attempts >= MAX_ATTEMPTS
-  end)
+  local list = panel.LoadoutList
+  applyNamesToCount(panel, list:GetChildrenCount())
+  readyListName = list:GetFullName()
 end
 
 -- ============================== tooltip rename prompt ==============================
@@ -439,50 +415,22 @@ end
 -- recreate loop that stacked duplicate prompts (2026-07-13 test).
 local promptsByExtra = {} -- [ExtraActionList full name] = { icon = ..., label = ... }
 
--- Whether this UE4SS build supports writing a mutated struct copy back onto a
--- property (font/color styling below). Older UE4SS builds don't, and the write
--- pierces pcall - not a catchable Lua error, it aborts the whole enclosing
--- function. Probed once per session, on whichever prompt is created first;
--- success is detected by reaching the line after the risky write, never by
--- pcall's return value. Deliberately probed AFTER the prompt widgets are
--- already recorded in promptsByExtra (see ensureRenamePrompt) so a failure
--- here can never cause the prompt-creation block to retry every tick again.
-local promptStyleProbed = false
-local promptStyleSupported = false
+-- Scalar writes were read back successfully on the installed stable runtime.
+-- Never assign Font/ColorAndOpacity/WidgetStyle userdata back as whole structs.
+local promptStyleLogged = false
+local function gameFont(sourceLabel)
+  local font = StaticFindObject(EDIT_FONT_PATH)
+  if font and font:IsValid() then return font end
+  return sourceLabel.Font.FontObject -- the already-loaded vanilla font
+end
 
-local function applyPromptLabelStyle(label)
-  if promptStyleProbed and not promptStyleSupported then
-    return -- known unsupported on this build; skip the pointless retry
-  end
-  local firstAttempt = not promptStyleProbed
-  promptStyleProbed = true
-
-  pcall(function()
-    local f = label.Font
-    f.Size = 10.0 -- before the font lookup, so a lookup failure can't abort the size
-    local font = StaticFindObject(EDIT_FONT_PATH)
-    if font and font:IsValid() then
-      f.FontObject = font
-    end
-    label.Font = f -- the risky write-back
-    promptStyleSupported = true
-  end)
-
-  if promptStyleSupported then
-    pcall(function()
-      local c = label.ColorAndOpacity
-      c.SpecifiedColor.R = 0.7
-      c.SpecifiedColor.G = 0.7
-      c.SpecifiedColor.B = 0.7
-      c.SpecifiedColor.A = 1.0
-      pcall(function() c.ColorUseRule = 0 end)
-      label.ColorAndOpacity = c
-    end)
-  end
-
-  if firstAttempt then
-    print(string.format("[LoadoutNamer] Rename-prompt label styling: %s.\n",
-      promptStyleSupported and "ok" or "skipped (struct write-back not supported on this UE4SS build)"))
+local function applyPromptLabelStyle(label, sourceLabel)
+  local ok, err = pcall(function() styles.prompt(label, gameFont(sourceLabel)) end)
+  if not ok then
+    runtime.log("Rename-prompt styling failed: " .. tostring(err))
+  elseif not promptStyleLogged then
+    promptStyleLogged = true
+    runtime.log("Rename-prompt scalar styling applied.")
   end
 end
 
@@ -535,15 +483,8 @@ local function ensureRenamePrompt(tooltip, recordIndex)
         return
       end
 
-      -- Style BEFORE the label enters the widget tree, same requirement as the
-      -- edit box (Slate builds its initial layout from whatever's already set;
-      -- styling after AddChild doesn't visually take). On a UE4SS build that
-      -- can't do struct write-back, this may abort this whole function the
-      -- FIRST time only - harmless: applyPromptLabelStyle records "probed"
-      -- before the risky write, so the very next ~50ms tooltip-poll tick skips
-      -- the styling attempt entirely and this function completes normally
-      -- (AddChild + entry recorded), from then on for the rest of the session.
-      applyPromptLabelStyle(label)
+      -- All styling is leaf-only and runs before Slate builds the label.
+      applyPromptLabelStyle(label, tooltip.ItemLabel)
 
       extra:AddChild(keyIcon)
       extra:AddChild(label)
@@ -580,13 +521,15 @@ end
 local tooltipGen = 0
 
 local function scheduleTooltipTitle(recordIndex)
+  if not tick.installed() then return end -- never queue work nothing will run
   tooltipGen = tooltipGen + 1
   local gen = tooltipGen
   local title = getName(recordIndex) or TOOLTIP_DEFAULT_TITLE
   local attempts = 0
   local logged = false
 
-  LoopAsync(50, function()
+  -- Runs on HUD ticks, so discovery and widget writes share the game thread.
+  tick.loop(50, function()
     if gen ~= tooltipGen then
       return true -- a newer hover superseded this poll
     end
@@ -599,17 +542,8 @@ local function scheduleTooltipTitle(recordIndex)
           -- Skip the class-default object: writing its template would leak the
           -- title into every future tooltip instance.
           if tt:IsValid() and not tt:GetFullName():find("Default__") then
-            ExecuteInGameThread(function()
-              -- The hover may have moved on between this callback being queued and the
-              -- game thread actually running it - re-check so a stale generation doesn't
-              -- still do work (and doesn't add to how many of these can be in flight at
-              -- once when the mouse sweeps quickly across several tiles).
-              if gen ~= tooltipGen then
-                return
-              end
-              pcall(function() tt.ItemLabel:SetText(FText(title)) end)
-              ensureRenamePrompt(tt, recordIndex)
-            end)
+            pcall(function() tt.ItemLabel:SetText(FText(title)) end)
+            ensureRenamePrompt(tt, recordIndex)
             if not logged then
               logged = true
               print(string.format("[LoadoutNamer] Tooltip title set for record %d ('%s').\n", recordIndex, title))
@@ -723,135 +657,53 @@ end
 -- Target look, from dev-data/Widget_Loadout.json (~3565-3581): the tile label is
 -- EDIT_FONT_PATH size 12, color 0.7/0.7/0.7.
 
--- Sets R/G/B/A on an FSlateColor's SpecifiedColor, and pins ColorUseRule to
--- UseColor_Specified (0) - if the rule was set to inherit, the specified color
--- would be ignored no matter what we write into it.
-local function setSlateColor(slateColor, r, g, b, a)
-  slateColor.SpecifiedColor.R = r
-  slateColor.SpecifiedColor.G = g
-  slateColor.SpecifiedColor.B = b
-  slateColor.SpecifiedColor.A = a
-  pcall(function() slateColor.ColorUseRule = 0 end)
-end
-
--- Best-effort restyle toward the game's look. WidgetStyle struct writes are the
--- riskiest op class (research doc 3.4), so: every path is read-probed before it is
--- written (a failed read = that layout doesn't exist on this engine version = skip,
--- never guess), each group has its own pcall, and any failure just leaves that part
--- of the box at the engine default. Must run BEFORE the box enters the widget tree
--- so Slate builds with these values.
--- Whether whole-struct write-back to WidgetStyle is supported on this UE4SS
--- build (independent from applyPromptLabelStyle's flag - different struct type,
--- probed separately). Unlike the tooltip prompt, this only runs once per F2
--- press (not per tick), so a failure here can't spam the log - but there's no
--- reason to repeat a known-failing write-back on every rename either.
-local editBoxStyleProbed = false
-local editBoxStyleSupported = false
-
-local function styleEditBox(box)
-  if editBoxStyleProbed and not editBoxStyleSupported then
-    print("[LoadoutNamer] Edit box styling skipped (struct write-back not supported on this UE4SS build).\n")
-    return
-  end
-  local firstAttempt = not editBoxStyleProbed
-  editBoxStyleProbed = true
-
-  local fontApplied, fgApplied, bgApplied, writtenBack = false, false, false, false
-
-  pcall(function()
-    -- Read-modify-WRITE-BACK: reading a struct property may hand back a detached
-    -- copy (first attempt's nested writes changed nothing visually), so after
-    -- mutating we assign the whole struct back to the property below.
-    local style = box.WidgetStyle
-
-    -- Font: probed at both known layouts - TextStyle.Font (newer style structs) and
-    -- Font directly on the style (what this game's build actually exposes; the
-    -- TextStyle path read-fails here, confirmed via the styling log 2026-07-13).
-    -- Size 10 (the Archetype subtitle's size) rather than the label's 12: the box has
-    -- fixed width, and the smaller size keeps more of a long name visible while typing.
-    pcall(function()
-      local fontStruct = nil
-      -- Both known layouts read-fail on this build; log each path's actual error
-      -- once so the real field name can be identified instead of guessed (H6).
-      local candidates = {
-        { "TextStyle.Font", function() return style.TextStyle.Font end },
-        { "Font",           function() return style.Font end },
-      }
-      for _, cand in ipairs(candidates) do
-        local ok, resultOrErr = pcall(cand[2])
-        if ok and resultOrErr then
-          fontStruct = resultOrErr
-          break
-        else
-          print(string.format("[LoadoutNamer] Font path '%s': %s\n", cand[1], tostring(resultOrErr)))
-        end
-      end
-      if fontStruct then
-        -- Each write logged separately: the path READS fine but the writes were
-        -- failing silently inside the enclosing pcall (2026-07-13 log).
-        local sizeOk, sizeErr = pcall(function() fontStruct.Size = 10.0 end)
-        if not sizeOk then
-          print("[LoadoutNamer] Font Size write failed: " .. tostring(sizeErr) .. "\n")
-        end
-        local fobOk, fobErr = pcall(function()
-          local font = StaticFindObject(EDIT_FONT_PATH)
-          if font and font:IsValid() then
-            fontStruct.FontObject = font
-          end
-        end)
-        if not fobOk then
-          print("[LoadoutNamer] FontObject write failed: " .. tostring(fobErr) .. "\n")
-        end
-        -- Write the font struct back up the chain in case reading it detached a copy
-        -- (colors didn't need this, but they're one level shallower).
-        pcall(function() style.TextStyle.Font = fontStruct end)
-        fontApplied = sizeOk or fobOk
-      end
-    end)
-
-    -- Typed text color: ashen gray, brighter than the label's 0.7 so it stands out
-    -- against the near-black box fill (user-tuned).
-    pcall(function()
-      local _ = style.ForegroundColor.SpecifiedColor.R
-      setSlateColor(style.ForegroundColor, 0.85, 0.85, 0.85, 1.0)
-      pcall(function() setSlateColor(style.FocusedForegroundColor, 0.85, 0.85, 0.85, 1.0) end)
-      fgApplied = true
-    end)
-
-    -- Background: tint the engine's white rounded-box brush dark and translucent so
-    -- the box reads as part of the tile in all three interaction states.
-    pcall(function()
-      local _ = style.BackgroundImageNormal.TintColor.SpecifiedColor.R
-      setSlateColor(style.BackgroundImageNormal.TintColor, 0.02, 0.02, 0.02, 0.85)
-      pcall(function() setSlateColor(style.BackgroundImageHovered.TintColor, 0.04, 0.04, 0.04, 0.9) end)
-      pcall(function() setSlateColor(style.BackgroundImageFocused.TintColor, 0.04, 0.04, 0.04, 0.9) end)
-      bgApplied = true
-    end)
-
-    box.WidgetStyle = style -- write the mutated struct back onto the widget
-    writtenBack = true
-    editBoxStyleSupported = true
-  end)
-
-  if firstAttempt then
-    print(string.format("[LoadoutNamer] Edit box styling: font=%s, text-color=%s, background=%s, write-back=%s.\n",
-      fontApplied and "ok" or "skipped", fgApplied and "ok" or "skipped", bgApplied and "ok" or "skipped",
-      writtenBack and "ok" or "FAILED"))
+local editStyleLogged = false
+local function styleEditBox(box, sourceLabel)
+  local ok, err = pcall(function() styles.editor(box, gameFont(sourceLabel)) end)
+  if not ok then
+    runtime.log("Rename-editor styling failed: " .. tostring(err))
+  elseif not editStyleLogged then
+    editStyleLogged = true
+    runtime.log("Rename-editor scalar styling applied.")
   end
 end
 
 -- ============================== rename session ==============================
 
 local hoveredTile = nil -- last tile the mouse entered (kept on leave - forgiving F2 timing)
-local editBox = nil     -- live EditableTextBox while a rename is in progress
-local editTile = nil
-local editIndex = nil
+local editor -- session controller, initialized below with its cleanup callback
 local hoverHookRegistered = false
+local tileConstructHookRegistered = false
 
--- Track which tile the mouse is over. Registered lazily on first panel construction so
--- Widget_Loadout_C is guaranteed loaded. Hazards respected: self:get() only (H3), read
--- cached properties only, no native calls in the hook body (H8).
-local function registerHoverHook()
+-- Game thread (tile Construct hook). See applySavedNames.
+local function applyNameToConstructedTile(context)
+  local ok, err = pcall(function()
+    if not readyListName or editor.active() then return end
+    local tile = context:get()
+    if not tile or not tile:IsValid() then return end
+    local parent = tile:GetParent()
+    if not parent or not parent:IsValid() or parent:GetFullName() ~= readyListName then return end
+    local nm = getName(tile.Index)
+    if nm then writeLabel(tile, tileTextFor(nm)) end
+  end)
+  if not ok then
+    print("[LoadoutNamer] Could not name a newly constructed tile: " .. tostring(err) .. "\n")
+  end
+end
+
+-- Track which tile the mouse is over, and name tiles built after the panel pass.
+-- Registered lazily on first panel construction so Widget_Loadout_C is guaranteed
+-- loaded. Hazards respected: self:get() only (H3), read cached properties only, no
+-- native calls in the hover hook body (H8).
+local function registerTileHooks()
+  if not tileConstructHookRegistered then
+    local ok, err = pcall(RegisterHook, TILE_CONSTRUCT_FN, applyNameToConstructedTile)
+    if ok then
+      tileConstructHookRegistered = true
+    else
+      print("[LoadoutNamer] FAILED to register tile naming for added slots: " .. tostring(err) .. "\n")
+    end
+  end
   if hoverHookRegistered then
     return
   end
@@ -861,7 +713,7 @@ local function registerHoverHook()
       if getOk and tile and tile:IsValid() then
         hoveredTile = tile
         -- Reflected property read only in the hook body (H8); the tooltip work
-        -- itself runs later on the async poll + game thread.
+        -- itself runs on later HUD ticks.
         local idxOk, idx = pcall(function() return tile.Index end)
         if idxOk and type(idx) == "number" then
           scheduleTooltipTitle(idx)
@@ -877,161 +729,148 @@ local function registerHoverHook()
   end
 end
 
-local function beginRename(tile, recordIndex)
-  ExecuteInGameThread(function()
-    local ok, err = pcall(function()
-      -- Parent the box into the TITLE row (the HorizontalBox holding the Label), so the
-      -- edit happens visually where the name lives. The blanked Label would normally
-      -- squish the box by reserving its MinDesiredWidth=130 in that row, so zero it for
-      -- the duration of the edit (plain-float property write; endRename restores it).
-      local row = tile.Label:GetParent()
-      if not row or not row:IsValid() then
-        error("could not reach the tile's title row")
-      end
-
-      local box = StaticConstructObject(StaticFindObject("/Script/UMG.EditableTextBox"), tile.WidgetTree)
-      if not box or not box:IsValid() then
-        error("failed to construct the EditableTextBox")
-      end
-      -- Raw write is fine here: MinimumDesiredWidth feeds desired-size computation each
-      -- frame, and a failed/ignored write just means a narrower box.
-      pcall(function() box.MinimumDesiredWidth = 130.0 end)
-      styleEditBox(box) -- before AddChild: Slate builds the box with these values
-
-      -- Blank the tile's label and stop it reserving width, THEN add the box - it
-      -- takes the label's place in the title row. The subtitle stays visible below.
-      -- MinDesiredWidth is a LAYOUT property: the real SetMinDesiredWidth setter is
-      -- mandatory, a raw write doesn't invalidate Slate layout (H4 - the raw write
-      -- indeed changed nothing, 2026-07-13 test).
-      writeLabel(tile, " ")
-      local widthOk, widthErr = pcall(function() tile.Label:SetMinDesiredWidth(0.0) end)
-      if not widthOk then
-        print("[LoadoutNamer] WARNING: failed to release the tile label's reserved width - the edit box may render squeezed: " .. tostring(widthErr) .. "\n")
-      end
-      row:AddChild(box)
-
-      editBox = box
-      editTile = tile
-      editIndex = recordIndex
-
-      -- Typing T/I/M must not yank the menu to another tab mid-edit.
-      suppressTabHotkeys()
-    end)
-    if ok then
-      print(string.format("[LoadoutNamer] Renaming slot (record %d) - click the box, type the new name, then Enter/%s to commit or Escape to cancel. Committing an empty name removes the custom name.\n", recordIndex, renameKeyName))
-    else
-      print("[LoadoutNamer] FAILED to open the rename box: " .. tostring(err) .. "\n")
+-- Keybind thread: only reserves the session. The hovered tile is checked on the
+-- game thread, when the editor is created.
+local function beginRename()
+  editor.open({characterID = characterKey()}, function(session)
+    local tile = hoveredTile
+    if not tile then
+      return false
     end
+    if not tile:IsValid() then
+      hoveredTile = nil
+      return false
+    end
+    local idxOk, recordIndex = pcall(function() return tile.Index end)
+    if not idxOk or type(recordIndex) ~= "number" then
+      print(string.format("[LoadoutNamer] %s: could not read the hovered tile's record index - ignoring.\n", renameKeyName))
+      return false
+    end
+    if recordIndex == RESERVED_RECORD_INDEX then
+      print(string.format("[LoadoutNamer] %s: that's the game's Last Gear State auto-save slot - it can't be renamed.\n", renameKeyName))
+      return false
+    end
+    session.tile, session.index = tile, recordIndex
+
+    -- Parent the editor into the title row, in place of the label.
+    local row = tile.Label:GetParent()
+    if not row or not row:IsValid() then
+      error("could not reach the tile's title row")
+    end
+    local box = StaticConstructObject(StaticFindObject("/Script/UMG.EditableTextBox"), tile.WidgetTree)
+    if not box or not box:IsValid() then
+      error("failed to construct the EditableTextBox")
+    end
+    session.box = box -- cleanup can recover a partially opened editor
+    box.Text = FText(getName(recordIndex) or "")
+    box.SelectAllTextWhenFocused = true
+    pcall(function() box.MinimumDesiredWidth = 130.0 end)
+    styleEditBox(box, tile.Label) -- before AddChild: Slate builds the box with these values
+
+    writeLabel(tile, " ")
+    local widthOk, widthErr = pcall(function() tile.Label:SetMinDesiredWidth(0.0) end)
+    if not widthOk then
+      print("[LoadoutNamer] WARNING: failed to release the tile label's reserved width: " .. tostring(widthErr) .. "\n")
+    end
+    local slot = row:AddChild(box)
+    assert(slot and slot:IsValid(), "could not attach the rename box")
+    suppressTabHotkeys()
+    print(string.format("[LoadoutNamer] Renaming record %d - type, then Enter/%s or click away to save; Escape cancels. An empty name removes the custom name.\n", recordIndex, renameKeyName))
   end)
 end
 
-local function endRename(commit)
-  ExecuteInGameThread(function()
-    local box, tile, idx = editBox, editTile, editIndex
-    editBox, editTile, editIndex = nil, nil, nil
+-- Called once per session, on the game thread, including failed/abandoned opens.
+local function closeRename(session, commit)
+  local box, tile, idx = session.box, session.tile, session.index
+  restoreTabHotkeys()
 
-    restoreTabHotkeys()
-
-    local text = ""
-    local textOk, textErr = pcall(function() text = box.Text:ToString() end)
-    if commit and not textOk then
-      print("[LoadoutNamer] WARNING: could not read the edit box's text on commit - treating as empty (name will be removed): " .. tostring(textErr) .. "\n")
-    end
-
-    local removeOk, removeErr = pcall(function()
-      local parent = box:GetParent()
-      if parent and parent:IsValid() then
-        parent:RemoveChild(box)
-      end
+  local text = ""
+  if commit then
+    local textOk, textErr = pcall(function()
+      assert(box and box:IsValid(), "rename box is unavailable")
+      text = box.Text:ToString()
     end)
-    if not removeOk then
-      print("[LoadoutNamer] WARNING: failed to remove the edit box from the tile - it may linger visually: " .. tostring(removeErr) .. "\n")
+    if not textOk then
+      commit = false -- never turn an unreadable/dead editor into a deleted name
+      print("[LoadoutNamer] WARNING: could not read the rename text; keeping the old name: " .. tostring(textErr) .. "\n")
+    elseif session.characterID ~= characterKey() then
+      commit = false
+      print("[LoadoutNamer] Character changed during rename; keeping the old name.\n")
     end
+  end
 
-    if not tile or not tile:IsValid() then
-      return -- screen closed mid-edit; the next apply pass restores labels anyway
+  local removeOk, removeErr = pcall(function()
+    if box and box:IsValid() then
+      local parent = box:GetParent()
+      if parent and parent:IsValid() then parent:RemoveChild(box) end
     end
-
-    -- Give the label its reserved title-row width back (zeroed for the edit).
-    -- Real setter, not a raw write - layout property (H4).
-    local widthOk, widthErr = pcall(function() tile.Label:SetMinDesiredWidth(130.0) end)
-    if not widthOk then
-      print("[LoadoutNamer] WARNING: failed to restore the tile label's width after a rename - the title row may look squeezed: " .. tostring(widthErr) .. "\n")
-    end
-
-    if not commit then
-      applyRestingLabel(tile, idx)
-      print("[LoadoutNamer] Rename cancelled.\n")
-      return
-    end
-
-    -- Trim and strip characters that would corrupt the tab-separated store.
-    text = text:gsub("[\t\r\n]", ""):match("^%s*(.-)%s*$")
-
-    if #text > MAX_NAME_LENGTH then
-      print(string.format("[LoadoutNamer] Name truncated to %d characters (the storage cap; the tile shows the first %d with '..', the tooltip shows the rest).\n", MAX_NAME_LENGTH, TILE_LABEL_MAX))
-      text = text:sub(1, MAX_NAME_LENGTH):match("^(.-)%s*$")
-    end
-
-    if text == "" then
-      clearName(idx)
-      saveNames()
-      applyRestingLabel(tile, idx)
-      print(string.format("[LoadoutNamer] Custom name removed from record %d - back to its default label.\n", idx))
-    else
-      setName(idx, text)
-      saveNames()
-      applyRestingLabel(tile, idx)
-      print(string.format("[LoadoutNamer] Record %d named '%s' (saved).\n", idx, text))
-    end
-
-    -- If the tooltip is on screen right now (mouse is still over the tile), bring its
-    -- title in line with the new name immediately.
-    scheduleTooltipTitle(idx)
   end)
+  if not removeOk then
+    print("[LoadoutNamer] WARNING: failed to remove the edit box: " .. tostring(removeErr) .. "\n")
+  end
+
+  if not tile or not tile:IsValid() then return end
+  local widthOk, widthErr = pcall(function() tile.Label:SetMinDesiredWidth(130.0) end)
+  if not widthOk then
+    print("[LoadoutNamer] WARNING: failed to restore the tile label's width: " .. tostring(widthErr) .. "\n")
+  end
+  if not commit then
+    applyRestingLabel(tile, idx)
+    print("[LoadoutNamer] Rename cancelled.\n")
+    return
+  end
+
+  -- Trim and strip characters that would corrupt the tab-separated store.
+  text = text:gsub("[\t\r\n]", ""):match("^%s*(.-)%s*$")
+  if #text > MAX_NAME_LENGTH then
+    print(string.format("[LoadoutNamer] Name truncated to %d characters (the storage cap; the tile shows the first %d with '..', the tooltip shows the rest).\n", MAX_NAME_LENGTH, TILE_LABEL_MAX))
+    text = text:sub(1, MAX_NAME_LENGTH):match("^(.-)%s*$")
+  end
+
+  if text == "" then
+    clearName(idx)
+    print(string.format("[LoadoutNamer] Custom name removed from record %d.\n", idx))
+  else
+    setName(idx, text)
+    print(string.format("[LoadoutNamer] Record %d named '%s' (saved).\n", idx, text))
+  end
+  saveNames()
+  applyRestingLabel(tile, idx)
+  scheduleTooltipTitle(idx)
+end
+
+editor = require("rename_session").new(closeRename, function(message)
+  print("[LoadoutNamer] " .. message .. "\n")
+end, tick)
+
+local function endRename(commit)
+  editor.finish(commit)
 end
 
 local function editSessionActive()
-  if not editBox then
-    return false
-  end
-  local ok, alive = pcall(function() return editBox:IsValid() end)
-  if ok and alive then
-    return true
-  end
-  editBox, editTile, editIndex = nil, nil, nil -- box died with the screen
-  ExecuteInGameThread(restoreTabHotkeys) -- belt-and-braces; menu reopen resets these anyway
-  return false
+  return editor.active()
 end
 
 -- ============================== keybinds ==============================
 
+-- UE4SS runs keybinds on its own input thread, so they only change Lua state.
+local tickMissingLogged = false
 RegisterKeyBind(renameKey, function()
   if editSessionActive() then
     endRename(true)
     return
   end
-
   if not hoveredTile then
     return
   end
-  local aliveOk, alive = pcall(function() return hoveredTile:IsValid() end)
-  if not aliveOk or not alive then
-    hoveredTile = nil
+  if not tick.installed() then
+    if not tickMissingLogged then
+      tickMissingLogged = true
+      print(string.format("[LoadoutNamer] %s ignored: the HUD tick that runs renames is not available yet.\n", renameKeyName))
+    end
     return
   end
-
-  local idxOk, idx = pcall(function() return hoveredTile.Index end)
-  if not idxOk or type(idx) ~= "number" then
-    print(string.format("[LoadoutNamer] %s: could not read the hovered tile's record index - ignoring.\n", renameKeyName))
-    return
-  end
-  if idx == RESERVED_RECORD_INDEX then
-    print(string.format("[LoadoutNamer] %s: that's the game's Last Gear State auto-save slot - it can't be renamed.\n", renameKeyName))
-    return
-  end
-
-  beginRename(hoveredTile, idx)
+  beginRename()
 end)
 
 RegisterKeyBind(Key.RETURN, function()
@@ -1046,9 +885,26 @@ RegisterKeyBind(Key.ESCAPE, function()
   end
 end)
 
+-- Some UI clicks do not move keyboard focus. Still finish the edit when the
+-- pointer is outside its box, without intercepting the normal save/equip click.
+RegisterKeyBind(Key.LEFT_MOUSE_BUTTON, function() editor.pointerPressed() end)
+RegisterKeyBind(Key.RIGHT_MOUSE_BUTTON, function() editor.pointerPressed() end)
+
 -- ============================== wiring ==============================
 
-NotifyOnNewObject(PANEL_CLASS, function(panel)
-  registerHoverHook()
+-- Hot reload in a world can register the HUD tick immediately. Otherwise the panel's
+-- Construct registers it, ahead of readiness; a later Refresh retry could be reached
+-- from another mod's HUD-tick callback (see game_tick.lua).
+tick.install()
+local tickMissingReported = false
+runtime.beforeReadiness("Construct", function()
+  registerTileHooks()
+  if not tick.install() and not tickMissingReported then
+    tickMissingReported = true
+    runtime.log("HUD tick unavailable; tooltip titles and renaming wait for it.")
+  end
+end)
+runtime.watchPanels(function(panel)
   applySavedNames(panel)
 end)
+runtime.start()
